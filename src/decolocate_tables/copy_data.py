@@ -21,6 +21,7 @@ from typing import Callable, List, Optional, Sequence, Tuple
 # connect_fn(bucket, role='src'|'dst'|'default') or connect_fn() for default host
 ConnectFn = Callable[..., object]
 
+from decolocate_tables.connection import ensure_connection_idle
 from decolocate_tables.progress import CopyProgressMonitor, backend_pid
 
 logger = logging.getLogger(__name__)
@@ -329,6 +330,7 @@ def insert_select_table(
         row_count,
     )
     conn = connect_fn()
+    ensure_connection_idle(conn)
     prev_autocommit = conn.autocommit
     conn.autocommit = True
     try:

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 
+from decolocate_tables.connection import ensure_connection_idle
 from decolocate_tables.copy_data import qualified_regclass
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ def table_has_statistics(cur, schema: str, table: str) -> bool:
 def run_analyze(conn, schema: str, table: str) -> None:
     reg = qualified_regclass(schema, table)
     logger.info("Running ANALYZE on %s", reg)
+    ensure_connection_idle(conn)
     prev_autocommit = conn.autocommit
     conn.autocommit = True
     try:

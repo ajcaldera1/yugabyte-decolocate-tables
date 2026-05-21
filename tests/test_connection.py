@@ -19,6 +19,7 @@ from decolocate_tables.connection import (
     YbServer,
     append_ssl_to_dsn,
     clear_odyssey_pooled_prepares,
+    ensure_connection_idle,
     libpq_ssl_env,
     resolve_ssl_options,
     server_for_bucket,
@@ -91,6 +92,13 @@ class TestLibpqSslEnv(unittest.TestCase):
         base = {"HOME": "/tmp"}
         env = libpq_ssl_env({}, base)
         self.assertEqual(env, base)
+
+
+class TestEnsureConnectionIdle(unittest.TestCase):
+    def test_rolls_back_open_transaction(self) -> None:
+        conn = mock.MagicMock()
+        ensure_connection_idle(conn)
+        conn.rollback.assert_called_once()
 
 
 class TestClearOdysseyPooledPrepares(unittest.TestCase):

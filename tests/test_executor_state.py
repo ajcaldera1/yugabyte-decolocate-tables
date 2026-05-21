@@ -26,7 +26,26 @@ from decolocate_tables.executor import (
     _detect_table_state,
     _execute_sql_idempotent,
     _pgcode,
+    _run_in_transaction,
 )
+
+
+class TestRunInTransaction(unittest.TestCase):
+    @patch("decolocate_tables.executor.ensure_connection_idle")
+    def test_resets_connection_before_autocommit(self, mock_idle) -> None:
+        conn = MagicMock()
+        conn.autocommit = False
+        cur = MagicMock()
+        conn.cursor.return_value.__enter__ = MagicMock(return_value=cur)
+        conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+        body = MagicMock()
+
+        _run_in_transaction(conn, "1s", None, body)
+
+        mock_idle.assert_called_once_with(conn)
+        body.assert_called_once_with(cur)
+        cur.execute.assert_any_call("BEGIN")
+        cur.execute.assert_any_call("COMMIT")
 
 
 class TestPgcode(unittest.TestCase):

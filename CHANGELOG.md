@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clear Odyssey / YSQL connection manager pooled `ysql_dump` prepared statements
   (`DEALLOCATE ALL` before and after each `ysql_dump`; disable with
   `--no-clear-odyssey-prepares`)
+- Fix psycopg3 ``can't change autocommit now: connection in transaction status INTRANS``
+  after planning queries by rolling back before transactional DDL
 
 ## [0.1.0] - 2026-05-20
 

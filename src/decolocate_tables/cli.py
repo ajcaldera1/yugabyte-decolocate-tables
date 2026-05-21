@@ -24,6 +24,7 @@ from typing import List, Optional
 from decolocate_tables.connection import (
     ConnectionFactory,
     SSLMODE_CHOICES,
+    ensure_connection_idle,
     resolve_ssl_options,
 )
 from decolocate_tables.copy_data import COPY_ROW_THRESHOLD, data_copy_method, get_row_count
@@ -385,6 +386,7 @@ def run(argv: Optional[List[str]] = None) -> int:
 
         if args.execute:
             conn_factory.discover_nodes(conn)
+            ensure_connection_idle(conn)
 
         show_copy_progress = (
             args.execute

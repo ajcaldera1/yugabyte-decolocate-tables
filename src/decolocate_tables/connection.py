@@ -194,6 +194,21 @@ def clear_odyssey_pooled_prepares(
                 conn.close()
 
 
+def ensure_connection_idle(conn) -> None:
+    """
+    End any open transaction on *conn*.
+
+    psycopg3 uses autocommit=False by default, so read-only queries during
+    planning leave the connection INTRANS. ``_run_in_transaction`` and other
+    helpers must roll back before toggling autocommit. Pooled Odyssey backends
+    may also be returned mid-transaction.
+    """
+    try:
+        conn.rollback()
+    except Exception as exc:
+        logger.debug("Could not roll back connection: %s", exc)
+
+
 def connect_psycopg(conninfo: dict, host: str, port: int):
     try:
         import psycopg

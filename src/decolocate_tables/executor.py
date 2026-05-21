@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from decolocate_tables.connection import ensure_connection_idle
 from decolocate_tables.copy_data import (
     CopyDataError,
     data_copy_method,
@@ -204,6 +205,7 @@ def _run_in_transaction(
     the explicit BEGIN is unambiguous for both psycopg2 and psycopg3.
     Timeouts are applied with SET LOCAL so they only affect this transaction.
     """
+    ensure_connection_idle(conn)
     prev_autocommit = conn.autocommit
     conn.autocommit = True
     try:
