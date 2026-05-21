@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with ``COLOCATION = false``)
 - Suffix constraint and index names with ``_n`` on new-table DDL so they do not
   collide with the renamed backup table's schema objects
+- Fix parallel COPY with psycopg3: detect driver when ``Connection.__module__``
+  is ``psycopg`` (not only ``psycopg.*``)
+- Strip ``SET yb_*`` / ``set_config('yb_*')`` session lines from view DDL so
+  non-superuser rollback and view recreate succeed
 
 ## [0.1.0] - 2026-05-20
 

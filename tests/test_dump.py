@@ -134,6 +134,24 @@ class TestSuffixNewTableObjectNames(unittest.TestCase):
 
 
 class TestStripPsqlMetaCommands(unittest.TestCase):
+    def test_removes_yb_session_set(self):
+        sql = (
+            "SET yb_ignore_pg_class_oids = true;\n"
+            "CREATE VIEW v AS SELECT 1;\n"
+        )
+        out = strip_psql_meta_commands(sql)
+        self.assertNotIn("yb_ignore_pg_class_oids", out)
+        self.assertIn("CREATE VIEW", out)
+
+    def test_removes_yb_set_config(self):
+        sql = (
+            "SELECT pg_catalog.set_config('yb_ignore_pg_class_oids', 'true', false);\n"
+            "CREATE VIEW v AS SELECT 1;\n"
+        )
+        out = strip_psql_meta_commands(sql)
+        self.assertNotIn("yb_ignore_pg_class_oids", out)
+        self.assertIn("CREATE VIEW", out)
+
     def test_removes_backslash_commands(self):
         sql = (
             "CREATE VIEW v AS SELECT 1;\n"

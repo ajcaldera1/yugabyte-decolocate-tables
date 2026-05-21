@@ -230,15 +230,34 @@ def inject_colocation_false(sql: str, split_into_tablets: Optional[int] = None) 
     return "".join(out)
 
 
+def _is_ysql_dump_session_line(line: str) -> bool:
+    """Lines that require superuser or are only meaningful in ysqlsh/psql."""
+    stripped = line.strip().rstrip(";").strip()
+    if not stripped:
+        return False
+    if re.match(r"SET\s+(?:(?:SESSION|LOCAL)\s+)?yb_", stripped, re.IGNORECASE):
+        return True
+    if re.match(
+        r"SELECT\s+.*set_config\s*\(\s*'yb_",
+        stripped,
+        re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
 def strip_psql_meta_commands(sql: str) -> str:
     """
     Remove psql meta-commands (``\\if``, ``\\connect``, etc.) from ysql_dump output.
 
-    Those lines are for ``psql``/``ysqlsh``, not valid when executing DDL via psycopg.
+    Also drops Yugabyte session ``SET yb_*`` / ``set_config('yb_*')`` lines that
+    ``ysql_dump`` emits for restore context but non-superuser roles cannot apply.
     """
     lines: List[str] = []
     for line in sql.splitlines(keepends=True):
         if line.lstrip().startswith("\\"):
+            continue
+        if _is_ysql_dump_session_line(line):
             continue
         lines.append(line)
     return "".join(lines)

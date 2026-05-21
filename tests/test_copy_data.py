@@ -14,6 +14,7 @@ import unittest
 
 from decolocate_tables.copy_data import (
     COPY_ROW_THRESHOLD,
+    _is_psycopg3,
     build_copy_in_sql,
     build_copy_out_sql,
     data_copy_method,
@@ -45,6 +46,29 @@ class TestHashPredicates(unittest.TestCase):
 
     def test_single_thread_predicate(self):
         self.assertEqual(hash_bucket_predicate(["id"], 1, 0), "TRUE")
+
+
+class TestIsPsycopg3(unittest.TestCase):
+    def test_psycopg3_module_name(self):
+        class Conn:
+            pass
+
+        Conn.__module__ = "psycopg"
+        self.assertTrue(_is_psycopg3(Conn()))
+
+    def test_psycopg3_submodule(self):
+        class Conn:
+            pass
+
+        Conn.__module__ = "psycopg.connection"
+        self.assertTrue(_is_psycopg3(Conn()))
+
+    def test_psycopg2(self):
+        class Conn:
+            pass
+
+        Conn.__module__ = "psycopg2.extensions"
+        self.assertFalse(_is_psycopg3(Conn()))
 
 
 class TestCopySql(unittest.TestCase):

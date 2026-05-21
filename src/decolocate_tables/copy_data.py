@@ -154,8 +154,11 @@ def build_copy_in_sql(schema: str, table: str, columns: Sequence[str]) -> str:
 
 
 def _is_psycopg3(conn) -> bool:
+    """Detect psycopg3 vs psycopg2 (Connection.__module__ is ``psycopg``, not ``psycopg.``)."""
     module = type(conn).__module__
-    return module.startswith("psycopg.") and not module.startswith("psycopg2")
+    if module.startswith("psycopg2"):
+        return False
+    return module == "psycopg" or module.startswith("psycopg.")
 
 
 def _pipe_copy_psycopg3(
