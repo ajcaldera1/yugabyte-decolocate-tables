@@ -221,6 +221,19 @@ class TestExecutableStatements(unittest.TestCase):
         self.assertEqual(len(stmts), 1)
         self.assertIn("CREATE VIEW", stmts[0])
 
+    def test_pg_stat_statements_reset_skipped(self):
+        sql = (
+            "SELECT pg_stat_statements_reset();\n"
+            "CREATE INDEX t_idx ON public.t (id);"
+        )
+        out = strip_psql_meta_commands(sql)
+        stmts = list(iter_executable_statements(out))
+        self.assertEqual(len(stmts), 1)
+        self.assertIn("CREATE INDEX", stmts[0])
+        self.assertFalse(
+            is_executable_sql_statement("SELECT pg_stat_statements_reset();")
+        )
+
 
 class TestSplitSchemaDump(unittest.TestCase):
     def test_splits_create_from_index(self):

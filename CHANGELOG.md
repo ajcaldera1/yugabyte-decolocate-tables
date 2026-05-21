@@ -39,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and binary-upgrade restore SQL from post-create and view DDL
 - Fix COPY progress bar: use ``set_postfix_str`` instead of invalid ``set_postfix`` call
 - Recreate views by executing only ``CREATE VIEW`` statements from captured DDL
+- Skip ``pg_stat_statements_reset`` and similar privileged maintenance calls in
+  post-create DDL on managed cloud clusters
 
 ## [0.1.0] - 2026-05-20
 

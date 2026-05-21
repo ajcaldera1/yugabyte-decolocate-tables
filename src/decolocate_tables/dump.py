@@ -273,6 +273,12 @@ _BINARY_UPGRADE_RESTORE_RE = re.compile(
     r"pg_restore_constraint|yb_read_|yb_restore_)",
     re.IGNORECASE,
 )
+# ysql_dump may emit extension maintenance calls the table owner cannot run on cloud.
+_PRIVILEGED_MAINTENANCE_RE = re.compile(
+    r"(?:pg_stat_statements_(?:reset|save)|pg_reload_conf|"
+    r"pg_rotate_logfile|pg_cancel_backend|pg_terminate_backend)\s*\(",
+    re.IGNORECASE,
+)
 
 
 def is_executable_sql_statement(stmt: str) -> bool:
@@ -288,6 +294,8 @@ def is_executable_sql_statement(stmt: str) -> bool:
     if _PGDUMP_METADATA_FRAGMENT_RE.match(s):
         return False
     if _BINARY_UPGRADE_RESTORE_RE.search(s):
+        return False
+    if _PRIVILEGED_MAINTENANCE_RE.search(s):
         return False
     return bool(_EXECUTABLE_SQL_START_RE.match(s))
 
@@ -333,6 +341,8 @@ def strip_psql_meta_commands(sql: str) -> str:
         if _is_ysql_dump_session_line(line):
             continue
         if _BINARY_UPGRADE_RESTORE_RE.search(line):
+            continue
+        if _PRIVILEGED_MAINTENANCE_RE.search(line):
             continue
         lines.append(line)
     return "".join(lines)
