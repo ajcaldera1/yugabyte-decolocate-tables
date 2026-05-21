@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   YugabyteDB grammar (fixes ``syntax error at or near "INTO"``)
 - Automatic rollback on ``--execute`` failure: restore Phase 1 renamed tables
   and recreate dropped views (disable with ``--no-rollback-on-failure``)
+- Fix PRIMARY KEY ``recordid ASC`` rewrite corrupting column names (e.g. ``recordi HASHd``)
+- Strip psql meta-commands (``\\if``, etc.) from ``ysql_dump`` view/table DDL
+- Only track dropped views for rollback after Phase 1 transaction commits
 
 ## [0.1.0] - 2026-05-20
 

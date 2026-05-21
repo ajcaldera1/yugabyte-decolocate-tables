@@ -58,7 +58,7 @@ PK_FIRST_COLUMN_PLAIN_RE = re.compile(
     (\bPRIMARY\s+KEY\s*\(\s*)       # PRIMARY KEY (
     (?!\()                          # not composite (col1, col2) form
     (\"[^\"]+\"|[\w.]+)             # leading column
-    (?!\s+(?:ASC|HASH|DESC)\b)      # no ordering yet on that column
+    (?=\s*[,)])                     # column ends before , or )
     """,
     re.IGNORECASE | re.VERBOSE,
 )
@@ -218,6 +218,20 @@ def inject_colocation_false(sql: str, split_into_tablets: Optional[int] = None) 
     return "".join(out)
 
 
+def strip_psql_meta_commands(sql: str) -> str:
+    """
+    Remove psql meta-commands (``\\if``, ``\\connect``, etc.) from ysql_dump output.
+
+    Those lines are for ``psql``/``ysqlsh``, not valid when executing DDL via psycopg.
+    """
+    lines: List[str] = []
+    for line in sql.splitlines(keepends=True):
+        if line.lstrip().startswith("\\"):
+            continue
+        lines.append(line)
+    return "".join(lines)
+
+
 def strip_view_statements(sql: str) -> str:
     """Remove CREATE/ALTER VIEW statements from a table dump."""
     parts = re.split(r"(?m)^(?=CREATE\s|ALTER\s)", sql)
@@ -333,7 +347,7 @@ def capture_table_ddl_resume(
     """
     pattern = f"{table.qualified.schema}.{backup_name}"
     raw = _run_ysql_dump(ysql_dump, conninfo, pattern, schema_only=True)
-    raw = strip_view_statements(raw)
+    raw = strip_psql_meta_commands(strip_view_statements(raw))
     raw = rewrite_table_name_in_sql(
         raw,
         table.qualified.schema,
@@ -371,7 +385,7 @@ def capture_table_ddl(
 ) -> None:
     pattern = f"{table.qualified.schema}.{table.qualified.name}"
     raw = _run_ysql_dump(ysql_dump, conninfo, pattern, schema_only=True)
-    raw = strip_view_statements(raw)
+    raw = strip_psql_meta_commands(strip_view_statements(raw))
     processed = inject_colocation_false(raw, split_into_tablets=split_into_tablets)
     create_sql, post_sql = split_schema_dump(processed)
 
@@ -395,6 +409,7 @@ def capture_view_ddl(
 ) -> None:
     pattern = f"{view.qualified.schema}.{view.qualified.name}"
     raw = _run_ysql_dump(ysql_dump, conninfo, pattern, schema_only=True)
+    raw = strip_psql_meta_commands(raw)
     safe = f"{view.qualified.schema}.{view.qualified.name}".replace(".", "_")
     path = work_dir / f"view_{safe}.sql"
     path.write_text(raw, encoding="utf-8")

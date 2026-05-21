@@ -19,6 +19,7 @@ from decolocate_tables.dump import (
     inject_colocation_false,
     rewrite_table_name_in_sql,
     split_schema_dump,
+    strip_psql_meta_commands,
     strip_view_statements,
 )
 
@@ -90,6 +91,27 @@ class TestInjectColocation(unittest.TestCase):
         sql = "CREATE TABLE t (a int, b int, PRIMARY KEY (a, b DESC));"
         out = inject_colocation_false(sql)
         self.assertIn("PRIMARY KEY (a HASH, b DESC)", out)
+
+    def test_pk_recordid_asc_not_corrupted(self):
+        sql = (
+            "CREATE TABLE t (recordid bigint, "
+            "CONSTRAINT t_pkey PRIMARY KEY(recordid ASC));"
+        )
+        out = inject_colocation_false(sql)
+        self.assertIn("PRIMARY KEY(recordid HASH", out)
+        self.assertNotIn("recordi HASH", out)
+
+
+class TestStripPsqlMetaCommands(unittest.TestCase):
+    def test_removes_backslash_commands(self):
+        sql = (
+            "CREATE VIEW v AS SELECT 1;\n"
+            "\\if :{?use_tablespaces}\n"
+            "\\endif\n"
+        )
+        out = strip_psql_meta_commands(sql)
+        self.assertIn("CREATE VIEW", out)
+        self.assertNotIn("\\if", out)
 
 
 class TestConvertPrimaryKeyToHash(unittest.TestCase):

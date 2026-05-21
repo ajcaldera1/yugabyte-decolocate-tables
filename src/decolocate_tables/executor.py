@@ -26,7 +26,7 @@ from decolocate_tables.copy_data import (
     get_row_count,
     migrate_table_data,
 )
-from decolocate_tables.dump import _split_sql_statements
+from decolocate_tables.dump import _split_sql_statements, strip_psql_meta_commands
 from decolocate_tables.models import MigrationPlan, TableInfo
 from decolocate_tables.progress import (
     CreateIndexProgressBar,
@@ -88,7 +88,9 @@ def _pgcode(exc) -> Optional[str]:
 def _read_sql(path: Optional[str]) -> str:
     if not path:
         return ""
-    return Path(path).read_text(encoding="utf-8").strip()
+    return strip_psql_meta_commands(
+        Path(path).read_text(encoding="utf-8").strip()
+    )
 
 
 def _execute_sql(cur, sql: str, label: str) -> None:
@@ -365,17 +367,25 @@ def _drop_views_if_needed(
     plan: MigrationPlan,
     dropped_views: set[str],
     phases: Optional[PhaseReporter],
-) -> None:
+) -> List[str]:
+    """
+    Drop dependent views not yet dropped in this run.
+
+    Returns view keys dropped in this call; the caller should merge into
+    ``dropped_views`` only after the surrounding transaction commits.
+    """
+    newly_dropped: List[str] = []
     for view in plan.views_drop_order:
         key = str(view.qualified)
         if key in dropped_views:
             continue
         qn = view.qualified
         cur.execute(f'DROP VIEW IF EXISTS "{qn.schema}"."{qn.name}"')
-        dropped_views.add(key)
+        newly_dropped.append(key)
         logger.info("Dropped view %s", qn)
         if phases is not None:
             phases.step(f"Dropped view {qn}")
+    return newly_dropped
 
 
 def _migrate_one_table_data(
@@ -672,12 +682,18 @@ def execute_plan(
                     "Drop dependent views (first table only), recreate uncollocated shell",
                 )
 
+                views_dropped_this_phase: List[str] = []
+
                 def _phase1(cur) -> None:
-                    _drop_views_if_needed(cur, plan, dropped_views, phases)
+                    nonlocal views_dropped_this_phase
+                    views_dropped_this_phase = _drop_views_if_needed(
+                        cur, plan, dropped_views, phases
+                    )
                     phases.step("recreate as uncollocated")
                     _create_empty_replacement(cur, table, backup_suffix)
 
                 _run_in_transaction(conn, lock_timeout, statement_timeout, _phase1)
+                dropped_views.update(views_dropped_this_phase)
                 phases.complete("uncollocated shell created")
                 states[qn.name] = _STATE_PHASE1_DONE
 
