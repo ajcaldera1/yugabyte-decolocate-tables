@@ -246,13 +246,35 @@ def _is_ysql_dump_session_line(line: str) -> bool:
     return False
 
 
+_YB_DO_BLOCK_RE = re.compile(r"DO\s+\$\$.*?\$\$;", re.IGNORECASE | re.DOTALL)
+
+
+def strip_yugabyte_restore_do_blocks(sql: str) -> str:
+    """
+    Remove ``DO $$ ... $$`` blocks that only configure Yugabyte restore ``yb_*`` GUCs.
+
+    Cloud roles often cannot ``SET yb_*`` inside these blocks during view recreate.
+    """
+    parts: List[str] = []
+    last = 0
+    for match in _YB_DO_BLOCK_RE.finditer(sql):
+        parts.append(sql[last : match.start()])
+        block = match.group(0)
+        if not re.search(r"\byb_\w+", block, re.IGNORECASE):
+            parts.append(block)
+        last = match.end()
+    parts.append(sql[last:])
+    return "".join(parts)
+
+
 def strip_psql_meta_commands(sql: str) -> str:
     """
     Remove psql meta-commands (``\\if``, ``\\connect``, etc.) from ysql_dump output.
 
-    Also drops Yugabyte session ``SET yb_*`` / ``set_config('yb_*')`` lines that
-    ``ysql_dump`` emits for restore context but non-superuser roles cannot apply.
+    Also drops Yugabyte session ``SET yb_*`` / ``set_config('yb_*')`` lines and
+    restore ``DO`` blocks that ``ysql_dump`` emits but non-superuser roles cannot apply.
     """
+    sql = strip_yugabyte_restore_do_blocks(sql)
     lines: List[str] = []
     for line in sql.splitlines(keepends=True):
         if line.lstrip().startswith("\\"):

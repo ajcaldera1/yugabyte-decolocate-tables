@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is ``psycopg`` (not only ``psycopg.*``)
 - Strip ``SET yb_*`` / ``set_config('yb_*')`` session lines from view DDL so
   non-superuser rollback and view recreate succeed
+- Fix psycopg3 COPY progress: count newlines in ``memoryview`` chunks, not only
+  ``bytes``
+- Strip ``DO $$`` restore blocks that set ``yb_*`` GUCs from captured view DDL
 
 ## [0.1.0] - 2026-05-20
 

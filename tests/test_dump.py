@@ -152,6 +152,25 @@ class TestStripPsqlMetaCommands(unittest.TestCase):
         self.assertNotIn("yb_ignore_pg_class_oids", out)
         self.assertIn("CREATE VIEW", out)
 
+    def test_removes_yb_do_block(self):
+        sql = (
+            "DO $$\n"
+            "BEGIN\n"
+            "  EXECUTE 'SET yb_ignore_relfilenode_ids TO false';\n"
+            "END;\n"
+            "$$;\n"
+            "CREATE VIEW v AS SELECT 1;\n"
+        )
+        out = strip_psql_meta_commands(sql)
+        self.assertNotIn("yb_ignore_relfilenode_ids", out)
+        self.assertNotIn("DO $$", out)
+        self.assertIn("CREATE VIEW", out)
+
+    def test_keeps_do_block_without_yb(self):
+        sql = "DO $$\nBEGIN\n  NULL;\nEND;\n$$;\nCREATE VIEW v AS SELECT 1;\n"
+        out = strip_psql_meta_commands(sql)
+        self.assertIn("DO $$", out)
+
     def test_removes_backslash_commands(self):
         sql = (
             "CREATE VIEW v AS SELECT 1;\n"

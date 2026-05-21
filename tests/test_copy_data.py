@@ -14,6 +14,7 @@ import unittest
 
 from decolocate_tables.copy_data import (
     COPY_ROW_THRESHOLD,
+    _copy_chunk_newline_count,
     _is_psycopg3,
     build_copy_in_sql,
     build_copy_out_sql,
@@ -46,6 +47,17 @@ class TestHashPredicates(unittest.TestCase):
 
     def test_single_thread_predicate(self):
         self.assertEqual(hash_bucket_predicate(["id"], 1, 0), "TRUE")
+
+
+class TestCopyChunkNewlineCount(unittest.TestCase):
+    def test_bytes(self):
+        self.assertEqual(_copy_chunk_newline_count(b"a\nb\n"), 2)
+
+    def test_memoryview(self):
+        self.assertEqual(
+            _copy_chunk_newline_count(memoryview(b"x\ny\nz\n")),
+            3,
+        )
 
 
 class TestIsPsycopg3(unittest.TestCase):

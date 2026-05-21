@@ -153,6 +153,13 @@ def build_copy_in_sql(schema: str, table: str, columns: Sequence[str]) -> str:
     return f"COPY {reg} ({cols}) FROM STDIN"
 
 
+def _copy_chunk_newline_count(chunk: object) -> int:
+    """Count row terminators in a COPY chunk (psycopg3 may yield memoryview)."""
+    if isinstance(chunk, (bytes, bytearray)):
+        return chunk.count(b"\n")
+    return bytes(chunk).count(b"\n")
+
+
 def _is_psycopg3(conn) -> bool:
     """Detect psycopg3 vs psycopg2 (Connection.__module__ is ``psycopg``, not ``psycopg.``)."""
     module = type(conn).__module__
@@ -184,7 +191,7 @@ def _pipe_copy_psycopg3(
                     for chunk in copy_out:
                         if chunk:
                             copy_in.write(chunk)
-                            rows += chunk.count(b"\n")
+                            rows += _copy_chunk_newline_count(chunk)
         dst_conn.commit()
     except Exception:
         dst_conn.rollback()
