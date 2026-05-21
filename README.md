@@ -94,6 +94,7 @@ By default, the tool runs `DEALLOCATE ALL` on several short-lived connections be
 | `--split-into-tablets N` | `SPLIT INTO N TABLETS` on new uncollocated tables (default: `1`) |
 | `--ysql-dump PATH` | Path to `ysql_dump` binary |
 | `--no-clear-odyssey-prepares` | Skip DEALLOCATE before/after each `ysql_dump` (direct YSQL, no pooler) |
+| `--no-rollback-on-failure` | Do not restore tables/views if `--execute` fails after Phase 1 |
 | `--sslmode MODE` | libpq SSL mode (`disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`); default: `$PGSSLMODE` |
 | `--sslcert PATH` | Client certificate; default: `$PGSSLCERT` |
 | `--sslkey PATH` | Client private key; default: `$PGSSLKEY` |
@@ -112,6 +113,8 @@ By default, the tool runs `DEALLOCATE ALL` on several short-lived connections be
 4. Captures full table DDL via `ysql_dump --schema-only --include-yb-metadata`
 5. Injects `COLOCATION = false` into `CREATE TABLE` statements
 6. On `--execute`: drops views, recreates each table uncollocated, copies data in parallel via piped `COPY` (partitioned by `mod(yb_hash_code(<pk>), N)`), recreates views
+
+If `--execute` fails after Phase 1 (views dropped and table renamed to a backup), the tool automatically drops the empty shell, renames the backup back to the original table name, and recreates dependent views from captured DDL. Use `--no-rollback-on-failure` to leave the database as-is for manual recovery.
 
 ## Data copy
 

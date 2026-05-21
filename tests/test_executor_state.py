@@ -26,8 +26,68 @@ from decolocate_tables.executor import (
     _detect_table_state,
     _execute_sql_idempotent,
     _pgcode,
+    _rollback_table_phase1,
     _run_in_transaction,
+    rollback_failed_migration,
 )
+from decolocate_tables.models import MigrationPlan, QualifiedName, TableInfo, ViewInfo
+
+
+class TestRollbackTablePhase1(unittest.TestCase):
+    def test_drops_shell_and_renames_backup(self) -> None:
+        cur = MagicMock()
+        table = TableInfo(
+            qualified=QualifiedName("public", "orders"),
+            oid=1,
+            relkind="r",
+            is_colocated=True,
+            backup_name="orders_colocated_bak",
+        )
+        _rollback_table_phase1(cur, table)
+        sqls = [c.args[0] for c in cur.execute.call_args_list]
+        self.assertIn('DROP TABLE IF EXISTS "public"."orders"', sqls)
+        self.assertIn(
+            'ALTER TABLE "public"."orders_colocated_bak" RENAME TO "orders"',
+            sqls,
+        )
+
+
+class TestRollbackFailedMigration(unittest.TestCase):
+    @patch("decolocate_tables.executor._run_in_transaction")
+    @patch("decolocate_tables.executor.ensure_connection_idle")
+    @patch("decolocate_tables.executor._detect_table_state")
+    def test_restores_phase1_tables_and_views(
+        self, mock_detect, mock_idle, mock_run_tx
+    ) -> None:
+        mock_detect.return_value = _STATE_PHASE1_DONE
+        table = TableInfo(
+            qualified=QualifiedName("public", "t"),
+            oid=1,
+            relkind="r",
+            is_colocated=True,
+            backup_name="t_colocated_bak",
+        )
+        view = ViewInfo(
+            qualified=QualifiedName("public", "v"),
+            oid=2,
+            ddl_file="/tmp/v.sql",
+        )
+        plan = MigrationPlan(
+            tables=[table],
+            views_create_order=[view],
+            views_drop_order=[view],
+            work_dir="/tmp",
+            dry_run=False,
+        )
+        rollback_failed_migration(
+            MagicMock(),
+            plan,
+            {"t": _STATE_PHASE1_DONE},
+            {str(view.qualified)},
+            "_colocated_bak",
+            views_recreated=False,
+        )
+        self.assertEqual(mock_run_tx.call_count, 2)
 
 
 class TestRunInTransaction(unittest.TestCase):

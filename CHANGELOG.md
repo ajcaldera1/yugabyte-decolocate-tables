@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after planning queries by rolling back before transactional DDL
 - Fix CREATE TABLE DDL: place ``SPLIT INTO N TABLETS`` outside ``WITH (...)`` per
   YugabyteDB grammar (fixes ``syntax error at or near "INTO"``)
+- Automatic rollback on ``--execute`` failure: restore Phase 1 renamed tables
+  and recreate dropped views (disable with ``--no-rollback-on-failure``)
 
 ## [0.1.0] - 2026-05-20
 

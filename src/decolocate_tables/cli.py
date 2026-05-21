@@ -126,6 +126,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--no-rollback-on-failure",
+        action="store_true",
+        help=(
+            "On --execute failure after Phase 1, do not restore renamed tables "
+            "or recreate dropped views"
+        ),
+    )
+    parser.add_argument(
         "--work-dir",
         default=None,
         help="Directory for captured DDL and manifest (default: temp dir)",
@@ -403,6 +411,7 @@ def run(argv: Optional[List[str]] = None) -> int:
             statement_timeout=args.statement_timeout,
             show_phase_progress=args.execute,
             show_copy_progress=show_copy_progress,
+            rollback_on_failure=not args.no_rollback_on_failure,
         )
     except (DiscoveryError, ExecutorError) as exc:
         logging.error("%s", exc)

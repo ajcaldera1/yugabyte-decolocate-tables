@@ -457,6 +457,101 @@ def _finalize_table(
     logger.info("Dropped backup table %s.%s", qn.schema, backup_name)
 
 
+def _rollback_table_phase1(cur, table: TableInfo) -> None:
+    """
+    Undo Phase 1 for one table: drop the empty shell and rename backup back.
+    """
+    qn = table.qualified
+    backup_name = table.backup_name
+    if not backup_name:
+        raise ExecutorError(
+            f"Cannot roll back {qn}: missing backup table name"
+        )
+
+    cur.execute(f'DROP TABLE IF EXISTS "{qn.schema}"."{qn.name}"')
+    cur.execute(
+        f'ALTER TABLE "{qn.schema}"."{backup_name}" RENAME TO "{qn.name}"'
+    )
+    logger.info(
+        "Rolled back Phase 1 for %s: dropped shell and restored %s from %s",
+        qn,
+        qn.name,
+        backup_name,
+    )
+
+
+def rollback_failed_migration(
+    conn,
+    plan: MigrationPlan,
+    states: Dict[str, str],
+    dropped_views: set[str],
+    backup_suffix: str,
+    *,
+    views_recreated: bool,
+    lock_timeout: Optional[str] = None,
+    statement_timeout: Optional[str] = None,
+) -> None:
+    """
+    Best-effort undo after a failed ``--execute``.
+
+    * Tables left in ``phase1_done`` (views dropped, rename + empty shell): drop
+      the shell and rename the backup to the original table name.
+    * Views dropped during this run but not recreated: run captured view DDL.
+    """
+    tables_to_restore = [
+        t
+        for t in plan.tables
+        if states.get(t.qualified.name) == _STATE_PHASE1_DONE
+    ]
+    need_views = (
+        bool(dropped_views)
+        and not views_recreated
+        and bool(plan.views_create_order)
+    )
+
+    if not tables_to_restore and not need_views:
+        logger.info("No automatic rollback needed (migration did not alter schema)")
+        return
+
+    ensure_connection_idle(conn)
+    logger.warning(
+        "Migration failed; attempting automatic rollback (%d table(s), "
+        "recreate_views=%s)",
+        len(tables_to_restore),
+        need_views,
+    )
+
+    if tables_to_restore:
+        def _rollback_tables(cur) -> None:
+            for table in tables_to_restore:
+                state = _detect_table_state(
+                    cur,
+                    table.qualified.schema,
+                    table.qualified.name,
+                    backup_suffix,
+                )
+                if state != _STATE_PHASE1_DONE:
+                    logger.warning(
+                        "Skipping rollback for %s: expected phase1_done, got %s",
+                        table.qualified,
+                        state,
+                    )
+                    continue
+                _rollback_table_phase1(cur, table)
+
+        _run_in_transaction(conn, lock_timeout, statement_timeout, _rollback_tables)
+
+    if need_views:
+        def _restore_views(cur) -> None:
+            _recreate_views(cur, plan)
+
+        _run_in_transaction(conn, lock_timeout, statement_timeout, _restore_views)
+        logger.info(
+            "Recreated %d dependent view(s) after rollback",
+            len(plan.views_create_order),
+        )
+
+
 def _recreate_views(cur, plan: MigrationPlan) -> None:
     """
     Recreate dependent views in topological order.  Uses CREATE OR REPLACE VIEW
@@ -504,6 +599,7 @@ def execute_plan(
     statement_timeout: Optional[str] = None,
     show_phase_progress: bool = True,
     show_copy_progress: bool = False,
+    rollback_on_failure: bool = True,
 ) -> None:
     if plan.dry_run:
         logger.info("Dry run: skipping execution")
@@ -511,157 +607,174 @@ def execute_plan(
 
     start = time.monotonic()
     phases = PhaseReporter(enabled=show_phase_progress)
-
-    # ── Step 0: Detect current state and set backup names ──────────────────────
-    phases.start(0, "Pre-flight", "Detect migration state and column statistics")
-    with conn.cursor() as cur:
-        states: Dict[str, str] = {}
-        for table in plan.tables:
-            qn = table.qualified
-            # Set backup_name unconditionally so later phases can use it even
-            # when the rename already happened on a prior run.
-            table.backup_name = f"{qn.name}{backup_suffix}"
-            state = _detect_table_state(cur, qn.schema, qn.name, backup_suffix)
-            states[qn.name] = state
-            logger.info("Table %s: migration state = %s", qn, state)
-
-        effective_state = _batch_state(states)
-        logger.info("Effective batch state: %s", effective_state)
-
-        # Read statistics from the correct table for each state.
-        _record_source_statistics(cur, plan, states)
-
-    phases.complete(f"batch state is {effective_state}")
-
-    # All tables already complete: optional view repair pass only.
-    if effective_state == _STATE_COMPLETE:
-        if plan.views_create_order:
-            phases.start(3, "Finalize", "Recreate views only")
-            def _views_only(cur) -> None:
-                for view in plan.views_create_order:
-                    phases.step(f"Recreate view {view.qualified}")
-                _recreate_views(cur, plan)
-            _run_in_transaction(conn, lock_timeout, statement_timeout, _views_only)
-            phases.complete(f"{len(plan.views_create_order)} view(s)")
-        if plan.analyze_if_had_stats and any(t.will_analyze for t in plan.tables):
-            phases.start(4, "Post-migrate ANALYZE", "Refresh planner statistics")
-            try:
-                _run_post_migrate_analyze(conn, plan, phases=phases)
-            except StatisticsError as exc:
-                raise ExecutorError(str(exc)) from exc
-            phases.complete("statistics updated")
-        logger.info("Migration already complete; nothing further to do.")
-        return
-
-    table_total = len(plan.tables)
+    states: Dict[str, str] = {}
     dropped_views: set[str] = set()
+    views_recreated = False
 
-    for table_num, table in enumerate(plan.tables, 1):
-        qn = table.qualified
-        state_at_start = states[qn.name]
+    try:
+        # ── Step 0: Detect current state and set backup names ──────────────────
+        phases.start(0, "Pre-flight", "Detect migration state and column statistics")
+        with conn.cursor() as cur:
+            for table in plan.tables:
+                qn = table.qualified
+                table.backup_name = f"{qn.name}{backup_suffix}"
+                state = _detect_table_state(cur, qn.schema, qn.name, backup_suffix)
+                states[qn.name] = state
+                logger.info("Table %s: migration state = %s", qn, state)
 
-        if state_at_start == _STATE_COMPLETE:
-            logger.info("Skipping %s: already migrated", qn)
-            if show_phase_progress:
-                phases.table_header(table_num, table_total, str(qn))
-                phases.step("already complete; skipping")
-            continue
+            effective_state = _batch_state(states)
+            logger.info("Effective batch state: %s", effective_state)
+            _record_source_statistics(cur, plan, states)
 
-        phases.table_header(table_num, table_total, str(qn))
+        phases.complete(f"batch state is {effective_state}")
 
-        # ── Phase 1: DDL for this table ──────────────────────────────────────
-        if state_at_start == _STATE_READY:
-            phases.start(
-                1,
-                "DDL preparation",
-                "Drop dependent views (first table only), recreate uncollocated shell",
-            )
+        if effective_state == _STATE_COMPLETE:
+            if plan.views_create_order:
+                phases.start(3, "Finalize", "Recreate views only")
 
-            def _phase1(cur) -> None:
-                _drop_views_if_needed(cur, plan, dropped_views, phases)
-                phases.step("recreate as uncollocated")
-                _create_empty_replacement(cur, table, backup_suffix)
+                def _views_only(cur) -> None:
+                    for view in plan.views_create_order:
+                        phases.step(f"Recreate view {view.qualified}")
+                    _recreate_views(cur, plan)
 
-            _run_in_transaction(conn, lock_timeout, statement_timeout, _phase1)
-            phases.complete("uncollocated shell created")
-            states[qn.name] = _STATE_PHASE1_DONE
-
-        # ── Phase 2: Data migration for this table ───────────────────────────
-        if states[qn.name] == _STATE_PHASE1_DONE:
-            phases.start(
-                2,
-                "Data migration",
-                "COPY workers spread across yb_servers() nodes",
-            )
-            if state_at_start == _STATE_PHASE1_DONE:
-                phases.step("truncate target (clear partial COPY from prior run)")
-                _truncate_table(conn, table, lock_timeout, statement_timeout)
-            try:
-                _migrate_one_table_data(
-                    conn,
-                    table,
-                    connect_fn,
-                    copy_threads,
-                    show_progress=show_copy_progress,
-                    phases=phases,
-                    table_num=table_num,
-                    table_total=table_total,
-                )
-            except CopyDataError as exc:
-                raise ExecutorError(str(exc)) from exc
-            phases.complete("data copied")
-
-            # ── Phase 3: Finalize this table ─────────────────────────────────
-            phases.start(
-                3,
-                "Finalize",
-                "Indexes, constraints, triggers, verify, drop backup",
-            )
-
-            def _phase3(cur) -> None:
-                phases.step("apply post-create DDL and verify")
-                _finalize_table(
-                    cur,
-                    table,
-                    connect_fn,
-                    show_index_progress=show_copy_progress,
-                )
-
-            _run_in_transaction(conn, lock_timeout, statement_timeout, _phase3)
-            phases.complete("table finalized")
-            states[qn.name] = _STATE_COMPLETE
-
-            # ── Phase 4: ANALYZE this table ──────────────────────────────────
-            if table.will_analyze:
+                _run_in_transaction(conn, lock_timeout, statement_timeout, _views_only)
+                phases.complete(f"{len(plan.views_create_order)} view(s)")
+                views_recreated = True
+            if plan.analyze_if_had_stats and any(t.will_analyze for t in plan.tables):
                 phases.start(4, "Post-migrate ANALYZE", "Refresh planner statistics")
                 try:
-                    phases.step(f"ANALYZE {qn}")
-                    run_analyze(conn, qn.schema, qn.name)
+                    _run_post_migrate_analyze(conn, plan, phases=phases)
                 except StatisticsError as exc:
                     raise ExecutorError(str(exc)) from exc
                 phases.complete("statistics updated")
+            logger.info("Migration already complete; nothing further to do.")
+            return
 
-    # ── Recreate dependent views after all tables are migrated ───────────────
-    if plan.views_create_order:
-        phases.start(3, "Dependent views", "Recreate views in dependency order")
-        def _recreate_all_views(cur) -> None:
-            for view in plan.views_create_order:
-                phases.step(f"Recreate view {view.qualified}")
-            _recreate_views(cur, plan)
-        _run_in_transaction(conn, lock_timeout, statement_timeout, _recreate_all_views)
-        phases.complete(f"{len(plan.views_create_order)} view(s)")
+        table_total = len(plan.tables)
 
-    elapsed = time.monotonic() - start
-    if show_phase_progress:
-        print(
-            f"\nMigration finished in {elapsed:.1f}s: "
-            f"{len(plan.tables)} table(s), {len(plan.views_create_order)} view(s)",
-            flush=True,
+        for table_num, table in enumerate(plan.tables, 1):
+            qn = table.qualified
+            state_at_start = states[qn.name]
+
+            if state_at_start == _STATE_COMPLETE:
+                logger.info("Skipping %s: already migrated", qn)
+                if show_phase_progress:
+                    phases.table_header(table_num, table_total, str(qn))
+                    phases.step("already complete; skipping")
+                continue
+
+            phases.table_header(table_num, table_total, str(qn))
+
+            if state_at_start == _STATE_READY:
+                phases.start(
+                    1,
+                    "DDL preparation",
+                    "Drop dependent views (first table only), recreate uncollocated shell",
+                )
+
+                def _phase1(cur) -> None:
+                    _drop_views_if_needed(cur, plan, dropped_views, phases)
+                    phases.step("recreate as uncollocated")
+                    _create_empty_replacement(cur, table, backup_suffix)
+
+                _run_in_transaction(conn, lock_timeout, statement_timeout, _phase1)
+                phases.complete("uncollocated shell created")
+                states[qn.name] = _STATE_PHASE1_DONE
+
+            if states[qn.name] == _STATE_PHASE1_DONE:
+                phases.start(
+                    2,
+                    "Data migration",
+                    "COPY workers spread across yb_servers() nodes",
+                )
+                if state_at_start == _STATE_PHASE1_DONE:
+                    phases.step("truncate target (clear partial COPY from prior run)")
+                    _truncate_table(conn, table, lock_timeout, statement_timeout)
+                try:
+                    _migrate_one_table_data(
+                        conn,
+                        table,
+                        connect_fn,
+                        copy_threads,
+                        show_progress=show_copy_progress,
+                        phases=phases,
+                        table_num=table_num,
+                        table_total=table_total,
+                    )
+                except CopyDataError as exc:
+                    raise ExecutorError(str(exc)) from exc
+                phases.complete("data copied")
+
+                phases.start(
+                    3,
+                    "Finalize",
+                    "Indexes, constraints, triggers, verify, drop backup",
+                )
+
+                def _phase3(cur) -> None:
+                    phases.step("apply post-create DDL and verify")
+                    _finalize_table(
+                        cur,
+                        table,
+                        connect_fn,
+                        show_index_progress=show_copy_progress,
+                    )
+
+                _run_in_transaction(conn, lock_timeout, statement_timeout, _phase3)
+                phases.complete("table finalized")
+                states[qn.name] = _STATE_COMPLETE
+
+                if table.will_analyze:
+                    phases.start(4, "Post-migrate ANALYZE", "Refresh planner statistics")
+                    try:
+                        phases.step(f"ANALYZE {qn}")
+                        run_analyze(conn, qn.schema, qn.name)
+                    except StatisticsError as exc:
+                        raise ExecutorError(str(exc)) from exc
+                    phases.complete("statistics updated")
+
+        if plan.views_create_order:
+            phases.start(3, "Dependent views", "Recreate views in dependency order")
+
+            def _recreate_all_views(cur) -> None:
+                for view in plan.views_create_order:
+                    phases.step(f"Recreate view {view.qualified}")
+                _recreate_views(cur, plan)
+
+            _run_in_transaction(conn, lock_timeout, statement_timeout, _recreate_all_views)
+            phases.complete(f"{len(plan.views_create_order)} view(s)")
+            views_recreated = True
+
+        elapsed = time.monotonic() - start
+        if show_phase_progress:
+            print(
+                f"\nMigration finished in {elapsed:.1f}s: "
+                f"{len(plan.tables)} table(s), {len(plan.views_create_order)} view(s)",
+                flush=True,
+            )
+        logger.info(
+            "Migration completed in %.1fs: %d table(s), %d view(s), copy_threads=%d",
+            elapsed,
+            len(plan.tables),
+            len(plan.views_create_order),
+            copy_threads,
         )
-    logger.info(
-        "Migration completed in %.1fs: %d table(s), %d view(s), copy_threads=%d",
-        elapsed,
-        len(plan.tables),
-        len(plan.views_create_order),
-        copy_threads,
-    )
+    except Exception:
+        if rollback_on_failure:
+            try:
+                rollback_failed_migration(
+                    conn,
+                    plan,
+                    states,
+                    dropped_views,
+                    backup_suffix,
+                    views_recreated=views_recreated,
+                    lock_timeout=lock_timeout,
+                    statement_timeout=statement_timeout,
+                )
+            except Exception as rollback_exc:
+                logger.exception(
+                    "Automatic rollback after migration failure also failed: %s",
+                    rollback_exc,
+                )
+        raise
