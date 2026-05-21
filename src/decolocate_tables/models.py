@@ -17,6 +17,20 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
 
+def _strip_identifier_quotes(ident: str) -> str:
+    ident = ident.strip()
+    if len(ident) >= 2 and ident[0] == '"' and ident[-1] == '"':
+        return ident[1:-1].replace('""', '"')
+    return ident
+
+
+def _identifier_needs_quoting(ident: str) -> bool:
+    """True when the identifier must be double-quoted in SQL / ysql_dump patterns."""
+    if ident != ident.lower():
+        return True
+    return not re.match(r"^[a-z_][a-z0-9_$]*$", ident, re.IGNORECASE)
+
+
 @dataclass(frozen=True)
 class QualifiedName:
     schema: str
@@ -27,14 +41,29 @@ class QualifiedName:
         text = text.strip()
         if "." in text:
             schema, name = text.split(".", 1)
-            return cls(schema=schema, name=name)
-        return cls(schema="public", name=text)
+            return cls(
+                schema=_strip_identifier_quotes(schema),
+                name=_strip_identifier_quotes(name),
+            )
+        return cls(schema="public", name=_strip_identifier_quotes(text))
 
     def __str__(self) -> str:
         return f"{self.schema}.{self.name}"
 
     def regclass(self) -> str:
         return f'"{self.schema}"."{self.name}"'
+
+    def ysql_dump_table_pattern(self) -> str:
+        """
+        Pattern for ``ysql_dump -t`` / ``pg_dump -t``.
+
+        Mixed-case and special identifiers must be quoted or dump finds no tables.
+        """
+
+        def _part(ident: str) -> str:
+            return f'"{ident}"' if _identifier_needs_quoting(ident) else ident
+
+        return f"{_part(self.schema)}.{_part(self.name)}"
 
 
 def parse_table_list(table_args: Sequence[str]) -> List[QualifiedName]:

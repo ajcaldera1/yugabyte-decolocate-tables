@@ -519,7 +519,7 @@ def capture_table_ddl_resume(
     The backup table still holds indexes, constraints, and triggers under the
     backup name; dump it and rewrite object names to the live target table.
     """
-    pattern = f"{table.qualified.schema}.{backup_name}"
+    pattern = QualifiedName(table.qualified.schema, backup_name).ysql_dump_table_pattern()
     raw = _run_ysql_dump(ysql_dump, conninfo, pattern, schema_only=True)
     raw = strip_psql_meta_commands(strip_view_statements(raw))
     raw = rewrite_table_name_in_sql(
@@ -558,7 +558,7 @@ def capture_table_ddl(
     conninfo: dict,
     split_into_tablets: Optional[int] = None,
 ) -> None:
-    pattern = f"{table.qualified.schema}.{table.qualified.name}"
+    pattern = table.qualified.ysql_dump_table_pattern()
     raw = _run_ysql_dump(ysql_dump, conninfo, pattern, schema_only=True)
     raw = strip_psql_meta_commands(strip_view_statements(raw))
     processed = inject_colocation_false(raw, split_into_tablets=split_into_tablets)
@@ -583,7 +583,7 @@ def capture_view_ddl(
     ysql_dump: str,
     conninfo: dict,
 ) -> None:
-    pattern = f"{view.qualified.schema}.{view.qualified.name}"
+    pattern = view.qualified.ysql_dump_table_pattern()
     raw = _run_ysql_dump(ysql_dump, conninfo, pattern, schema_only=True)
     raw = strip_psql_meta_commands(raw)
     safe = f"{view.qualified.schema}.{view.qualified.name}".replace(".", "_")

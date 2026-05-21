@@ -43,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   post-create DDL on managed cloud clusters
 - Implement Phase 3 row-count and uncollocated verification (fixes
   ``NameError: _verify_row_counts``)
+- Quote mixed-case identifiers in ``ysql_dump -t`` patterns (e.g.
+  ``public."FBNK_CURRENCY"``) so uppercase table names are found
 
 ## [0.1.0] - 2026-05-20
 
