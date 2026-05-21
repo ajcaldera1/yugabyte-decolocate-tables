@@ -249,6 +249,56 @@ def _is_ysql_dump_session_line(line: str) -> bool:
 _YB_DO_BLOCK_RE = re.compile(r"DO\s+\$\$.*?\$\$;", re.IGNORECASE | re.DOTALL)
 
 
+def strip_pg_dump_line_comments(sql: str) -> str:
+    """Remove ``--`` comment lines so semicolons inside them are not split as SQL."""
+    lines: List[str] = []
+    for line in sql.splitlines(keepends=True):
+        if line.lstrip().startswith("--"):
+            continue
+        lines.append(line)
+    return "".join(lines)
+
+
+_PGDUMP_METADATA_FRAGMENT_RE = re.compile(
+    r"^(?:Type|Schema|Owner|Name|Dependencies|Relates)\s*:",
+    re.IGNORECASE,
+)
+_EXECUTABLE_SQL_START_RE = re.compile(
+    r"^(?:CREATE|ALTER|DROP|COMMENT|GRANT|REVOKE|SET|SELECT|INSERT|UPDATE|"
+    r"DELETE|DO|TRUNCATE|ANALYZE|VACUUM|REFRESH)\b",
+    re.IGNORECASE,
+)
+_BINARY_UPGRADE_RESTORE_RE = re.compile(
+    r"(?:binary_upgrade_|pg_nextoid|pg_restore_relation|"
+    r"pg_restore_constraint|yb_read_|yb_restore_)",
+    re.IGNORECASE,
+)
+
+
+def is_executable_sql_statement(stmt: str) -> bool:
+    """
+    True if *stmt* is real DDL/DML from ysql_dump, not a metadata fragment left
+    after splitting on semicolons inside ``-- Name: ...; Type: TABLE;`` comments.
+    """
+    s = stmt.strip()
+    if not s or s == ";":
+        return False
+    if s.lstrip().startswith("--"):
+        return False
+    if _PGDUMP_METADATA_FRAGMENT_RE.match(s):
+        return False
+    if _BINARY_UPGRADE_RESTORE_RE.search(s):
+        return False
+    return bool(_EXECUTABLE_SQL_START_RE.match(s))
+
+
+def iter_executable_statements(sql: str):
+    """Yield statements from captured SQL that are safe to execute via psycopg."""
+    for stmt in _split_sql_statements(sql):
+        if is_executable_sql_statement(stmt):
+            yield stmt
+
+
 def strip_yugabyte_restore_do_blocks(sql: str) -> str:
     """
     Remove ``DO $$ ... $$`` blocks that only configure Yugabyte restore ``yb_*`` GUCs.
@@ -275,11 +325,14 @@ def strip_psql_meta_commands(sql: str) -> str:
     restore ``DO`` blocks that ``ysql_dump`` emits but non-superuser roles cannot apply.
     """
     sql = strip_yugabyte_restore_do_blocks(sql)
+    sql = strip_pg_dump_line_comments(sql)
     lines: List[str] = []
     for line in sql.splitlines(keepends=True):
         if line.lstrip().startswith("\\"):
             continue
         if _is_ysql_dump_session_line(line):
+            continue
+        if _BINARY_UPGRADE_RESTORE_RE.search(line):
             continue
         lines.append(line)
     return "".join(lines)
@@ -310,7 +363,7 @@ def split_schema_dump(sql: str) -> Tuple[str, str]:
         stripped = stmt.lstrip()
         if CREATE_TABLE_RE.match(stripped):
             create_parts.append(stmt)
-        elif stripped and not stripped.startswith("--"):
+        elif is_executable_sql_statement(stmt):
             other_parts.append(stmt)
 
     return "\n\n".join(create_parts), "\n\n".join(other_parts)

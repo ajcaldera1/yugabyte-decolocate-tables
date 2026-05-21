@@ -15,8 +15,11 @@ from unittest import mock
 
 from decolocate_tables.dump import (
     _run_ysql_dump,
+    _split_sql_statements,
     convert_primary_key_to_hash_sharding,
     inject_colocation_false,
+    is_executable_sql_statement,
+    iter_executable_statements,
     rewrite_table_name_in_sql,
     split_schema_dump,
     strip_psql_meta_commands,
@@ -192,6 +195,31 @@ class TestConvertPrimaryKeyToHash(unittest.TestCase):
         sql = "CREATE INDEX idx ON t (a ASC);"
         out = convert_primary_key_to_hash_sharding(sql)
         self.assertIn("(a ASC)", out)
+
+
+class TestExecutableStatements(unittest.TestCase):
+    def test_pgdump_comment_not_executed(self):
+        sql = (
+            "-- Name: t; Type: TABLE; Schema: public; Owner: -\n"
+            "CREATE INDEX t_idx ON public.t (id);"
+        )
+        cleaned = strip_psql_meta_commands(sql)
+        stmts = list(iter_executable_statements(cleaned))
+        self.assertEqual(len(stmts), 1)
+        self.assertIn("CREATE INDEX", stmts[0])
+
+    def test_metadata_fragment_rejected(self):
+        self.assertFalse(is_executable_sql_statement("Type: TABLE;"))
+
+    def test_binary_upgrade_select_stripped(self):
+        sql = (
+            "SELECT pg_catalog.binary_upgrade_set_next_pg_table_oid(0);\n"
+            "CREATE VIEW v AS SELECT 1;\n"
+        )
+        out = strip_psql_meta_commands(sql)
+        stmts = list(iter_executable_statements(out))
+        self.assertEqual(len(stmts), 1)
+        self.assertIn("CREATE VIEW", stmts[0])
 
 
 class TestSplitSchemaDump(unittest.TestCase):

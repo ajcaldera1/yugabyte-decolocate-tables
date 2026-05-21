@@ -26,7 +26,10 @@ from decolocate_tables.copy_data import (
     get_row_count,
     migrate_table_data,
 )
-from decolocate_tables.dump import _split_sql_statements, strip_psql_meta_commands
+from decolocate_tables.dump import (
+    iter_executable_statements,
+    strip_psql_meta_commands,
+)
 from decolocate_tables.models import MigrationPlan, TableInfo
 from decolocate_tables.progress import (
     CreateIndexProgressBar,
@@ -125,10 +128,7 @@ def _execute_sql_idempotent(cur, sql: str, label: str) -> None:
     with a duplicate-object SQLSTATE (42710, 42P07) are silently skipped so the
     method is safe to call a second time when some objects already exist.
     """
-    for stmt in _split_sql_statements(sql):
-        stmt = stmt.strip()
-        if not stmt or stmt == ";":
-            continue
+    for stmt in iter_executable_statements(sql):
         _execute_one_idempotent(cur, stmt, label)
 
 
@@ -145,11 +145,7 @@ def _execute_post_create_sql(
     Execute post-create DDL, showing a pg_stat_progress_create_index bar for
     each CREATE INDEX statement when progress reporting is enabled.
     """
-    statements: List[str] = []
-    for stmt in _split_sql_statements(sql):
-        stmt = stmt.strip()
-        if stmt and stmt != ";":
-            statements.append(stmt)
+    statements: List[str] = list(iter_executable_statements(sql))
 
     index_statements = [s for s in statements if is_create_index_statement(s)]
     index_total = len(index_statements)
@@ -567,16 +563,34 @@ def _recreate_views(cur, plan: MigrationPlan) -> None:
     Recreate dependent views in topological order.  Uses CREATE OR REPLACE VIEW
     so the step is safe to re-run if it previously completed only partially.
     """
+    create_view_re = re.compile(
+        r"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\b",
+        re.IGNORECASE,
+    )
     for view in plan.views_create_order:
         ddl = _read_sql(view.ddl_file)
-        # Make idempotent: CREATE OR REPLACE VIEW works even if the view exists.
-        ddl = re.sub(
-            r"\bCREATE\s+VIEW\b",
-            "CREATE OR REPLACE VIEW",
-            ddl,
-            flags=re.IGNORECASE,
-        )
-        _execute_sql(cur, ddl, f"recreate view {view.qualified}")
+        found = False
+        for stmt in iter_executable_statements(ddl):
+            if not create_view_re.match(stmt):
+                logger.debug(
+                    "Skipping non-view statement in %s: %.80s",
+                    view.qualified,
+                    stmt,
+                )
+                continue
+            found = True
+            stmt = re.sub(
+                r"\bCREATE\s+VIEW\b",
+                "CREATE OR REPLACE VIEW",
+                stmt,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+            _execute_one_idempotent(cur, stmt, f"recreate view {view.qualified}")
+        if not found:
+            raise ExecutorError(
+                f"No CREATE VIEW statement in captured DDL for {view.qualified}"
+            )
 
 
 def _run_post_migrate_analyze(

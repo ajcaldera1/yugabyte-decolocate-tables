@@ -385,7 +385,7 @@ class CopyProgressMonitor:
             if status != "IN PROGRESS":
                 parts.append(status)
             if parts:
-                state.bar.set_postfix(", ".join(parts), refresh=False)
+                state.bar.set_postfix_str(", ".join(parts), refresh=False)
             state.bar.refresh()
 
         if status == "SUCCESS":

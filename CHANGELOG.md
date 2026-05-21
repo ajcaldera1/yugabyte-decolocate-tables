@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix psycopg3 COPY progress: count newlines in ``memoryview`` chunks, not only
   ``bytes``
 - Strip ``DO $$`` restore blocks that set ``yb_*`` GUCs from captured view DDL
+- Strip pg_dump ``--`` comment lines and skip metadata fragments (e.g. ``Type: TABLE;``)
+  and binary-upgrade restore SQL from post-create and view DDL
+- Fix COPY progress bar: use ``set_postfix_str`` instead of invalid ``set_postfix`` call
+- Recreate views by executing only ``CREATE VIEW`` statements from captured DDL
 
 ## [0.1.0] - 2026-05-20
 
