@@ -308,6 +308,64 @@ def _split_sql_statements(sql: str) -> List[str]:
     return statements
 
 
+# Constraint and index names are unique per schema; the renamed backup keeps the
+# original names while the new table's DDL must use distinct names.
+DEFAULT_NEW_TABLE_CONSTRAINT_SUFFIX = "_n"
+
+_SQL_IDENT = r'("(?:[^"]|"")*"|\w+)'
+
+_CONSTRAINT_NAME_RE = re.compile(
+    rf"\bCONSTRAINT\s+({_SQL_IDENT})",
+    re.IGNORECASE,
+)
+_ADD_CONSTRAINT_NAME_RE = re.compile(
+    rf"\bADD\s+CONSTRAINT\s+({_SQL_IDENT})",
+    re.IGNORECASE,
+)
+_CREATE_INDEX_NAME_RE = re.compile(
+    rf"(\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+)"
+    rf"(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?({_SQL_IDENT})",
+    re.IGNORECASE,
+)
+
+
+def _suffix_sql_identifier(ident: str, suffix: str) -> str:
+    if ident.startswith('"'):
+        inner = ident[1:-1]
+        if inner.endswith(suffix):
+            return ident
+        return f'"{inner}{suffix}"'
+    if ident.endswith(suffix):
+        return ident
+    return ident + suffix
+
+
+def suffix_new_table_object_names(
+    sql: str,
+    suffix: str = DEFAULT_NEW_TABLE_CONSTRAINT_SUFFIX,
+) -> str:
+    """
+    Append *suffix* to constraint and index names in captured DDL for the new table.
+
+    After Phase 1 renames the colocated table to a backup, those object names remain
+    in the schema; reusing them on the uncollocated table fails with duplicate-name errors.
+    """
+
+    def _constraint_repl(m: re.Match[str]) -> str:
+        return f"CONSTRAINT {_suffix_sql_identifier(m.group(1), suffix)}"
+
+    def _add_constraint_repl(m: re.Match[str]) -> str:
+        return f"ADD CONSTRAINT {_suffix_sql_identifier(m.group(1), suffix)}"
+
+    def _index_repl(m: re.Match[str]) -> str:
+        return f"{m.group(1)}{_suffix_sql_identifier(m.group(2), suffix)}"
+
+    sql = _CONSTRAINT_NAME_RE.sub(_constraint_repl, sql)
+    sql = _ADD_CONSTRAINT_NAME_RE.sub(_add_constraint_repl, sql)
+    sql = _CREATE_INDEX_NAME_RE.sub(_index_repl, sql)
+    return sql
+
+
 def rewrite_table_name_in_sql(
     sql: str,
     schema: str,
@@ -367,6 +425,7 @@ def capture_table_ddl_resume(
         table.qualified.name,
     )
     _create_sql, post_sql = split_schema_dump(raw)
+    post_sql = suffix_new_table_object_names(post_sql)
 
     safe = f"{table.qualified.schema}.{table.qualified.name}".replace(".", "_")
     create_path = work_dir / f"table_{safe}_create.sql"
@@ -399,6 +458,7 @@ def capture_table_ddl(
     raw = _run_ysql_dump(ysql_dump, conninfo, pattern, schema_only=True)
     raw = strip_psql_meta_commands(strip_view_statements(raw))
     processed = inject_colocation_false(raw, split_into_tablets=split_into_tablets)
+    processed = suffix_new_table_object_names(processed)
     create_sql, post_sql = split_schema_dump(processed)
 
     safe = f"{table.qualified.schema}.{table.qualified.name}".replace(".", "_")

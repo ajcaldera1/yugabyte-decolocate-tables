@@ -21,6 +21,7 @@ from decolocate_tables.dump import (
     split_schema_dump,
     strip_psql_meta_commands,
     strip_view_statements,
+    suffix_new_table_object_names,
 )
 
 
@@ -100,6 +101,36 @@ class TestInjectColocation(unittest.TestCase):
         out = inject_colocation_false(sql)
         self.assertIn("PRIMARY KEY(recordid HASH", out)
         self.assertNotIn("recordi HASH", out)
+
+
+class TestSuffixNewTableObjectNames(unittest.TestCase):
+    def test_create_table_inline_pkey(self):
+        sql = (
+            "CREATE TABLE t (recordid bigint, "
+            "CONSTRAINT t_pkey PRIMARY KEY(recordid HASH));"
+        )
+        out = suffix_new_table_object_names(sql)
+        self.assertIn("CONSTRAINT t_pkey_n PRIMARY KEY", out)
+
+    def test_post_create_index_and_add_constraint(self):
+        sql = (
+            "CREATE UNIQUE INDEX t_pkey ON public.t (recordid);\n"
+            "ALTER TABLE ONLY public.t ADD CONSTRAINT t_chk CHECK (id > 0);"
+        )
+        out = suffix_new_table_object_names(sql)
+        self.assertIn("CREATE UNIQUE INDEX t_pkey_n ON", out)
+        self.assertIn("ADD CONSTRAINT t_chk_n CHECK", out)
+
+    def test_quoted_identifiers(self):
+        sql = 'CONSTRAINT "My PKey" PRIMARY KEY (id);'
+        out = suffix_new_table_object_names(sql)
+        self.assertIn('CONSTRAINT "My PKey_n" PRIMARY KEY', out)
+
+    def test_idempotent_when_already_suffixed(self):
+        sql = "CONSTRAINT t_pkey_n PRIMARY KEY (id);"
+        out = suffix_new_table_object_names(sql)
+        self.assertIn("CONSTRAINT t_pkey_n PRIMARY KEY", out)
+        self.assertNotIn("t_pkey_n_n", out)
 
 
 class TestStripPsqlMetaCommands(unittest.TestCase):
