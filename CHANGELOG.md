@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--no-clear-odyssey-prepares`)
 - Fix psycopg3 ``can't change autocommit now: connection in transaction status INTRANS``
   after planning queries by rolling back before transactional DDL
+- Fix CREATE TABLE DDL: place ``SPLIT INTO N TABLETS`` outside ``WITH (...)`` per
+  YugabyteDB grammar (fixes ``syntax error at or near "INTO"``)
 
 ## [0.1.0] - 2026-05-20
 

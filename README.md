@@ -121,7 +121,7 @@ By default, the tool runs `DEALLOCATE ALL` on several short-lived connections be
 | 1 – 99,999 | `INSERT INTO ... SELECT * FROM ...` |
 | 100,000+ | Parallel piped `COPY` via `--copy-threads` workers |
 
-Captured `CREATE TABLE` DDL is adjusted for uncollocated tables: `COLOCATION = false`, `SPLIT INTO 1 TABLETS` (by default), and the primary-key sharding column is changed from `ASC` to `HASH`.
+Captured `CREATE TABLE` DDL is adjusted for uncollocated tables: `WITH (COLOCATION = false)`, a top-level `SPLIT INTO 1 TABLETS` clause (by default), and the primary-key sharding column is changed from `ASC` to `HASH`.
 
 Migration runs per table (FK order): DDL → data copy → finalize (indexes/constraints) → optional `ANALYZE`, then recreates all dependent views.
 

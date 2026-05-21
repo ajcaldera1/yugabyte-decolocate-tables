@@ -124,9 +124,9 @@ def _effective_split_tablets(split_into_tablets: Optional[int]) -> int:
     return split_into_tablets
 
 
-def _colocation_false_option(split_into_tablets: Optional[int]) -> str:
-    n = _effective_split_tablets(split_into_tablets)
-    return f"COLOCATION = false, SPLIT INTO {n} TABLETS"
+def _colocation_false_with_option() -> str:
+    """YSQL table property; belongs inside ``WITH (...)`` only."""
+    return "COLOCATION = false"
 
 
 def convert_primary_key_to_hash_sharding(stmt: str) -> str:
@@ -142,53 +142,56 @@ def convert_primary_key_to_hash_sharding(stmt: str) -> str:
     return stmt
 
 
-def _set_split_into_tablets(stmt: str, num_tablets: int) -> str:
-    """Ensure the statement uses SPLIT INTO num_tablets TABLETS."""
-    replacement = f"SPLIT INTO {num_tablets} TABLETS"
-    if SPLIT_INTO_TABLETS_RE.search(stmt):
-        return SPLIT_INTO_TABLETS_RE.sub(replacement, stmt, count=1)
+def _normalize_with_list_commas(stmt: str) -> str:
+    """Tidy ``WITH (...)`` lists after removing misplaced clauses."""
+    stmt = re.sub(r"\(\s*,", "(", stmt)
+    stmt = re.sub(r",\s*,", ", ", stmt)
+    stmt = re.sub(r",\s*\)", ")", stmt)
     return stmt
+
+
+def _ensure_split_clause(stmt: str, num_tablets: int) -> str:
+    """
+    Ensure ``SPLIT INTO n TABLETS`` is a top-level clause, not inside ``WITH``.
+
+    YugabyteDB grammar: ``WITH (COLOCATION = ...)`` then ``SPLIT INTO ... TABLETS``.
+    """
+    stmt = SPLIT_INTO_TABLETS_RE.sub("", stmt)
+    stmt = _normalize_with_list_commas(stmt)
+    stmt = stmt.rstrip().rstrip(";").rstrip()
+    return f"{stmt} SPLIT INTO {num_tablets} TABLETS;"
 
 
 def _inject_colocation_into_statement(
     stmt: str, split_into_tablets: Optional[int] = None
 ) -> str:
     num_tablets = _effective_split_tablets(split_into_tablets)
-    extra = _colocation_false_option(split_into_tablets)
+    colocation_opt = _colocation_false_with_option()
     stmt = COLOCATION_TRUE_RE.sub(lambda m: f"{m.group(1)} = false", stmt)
-
-    if re.search(r"\b(COLOCATION|colocation)\s*=\s*false", stmt, re.IGNORECASE):
-        if not SPLIT_INTO_TABLETS_RE.search(stmt):
-            matches = list(re.finditer(r"\bWITH\s*\(", stmt, re.IGNORECASE))
-            if matches:
-                pos = matches[-1].end()
-                stmt = (
-                    stmt[:pos]
-                    + f"SPLIT INTO {num_tablets} TABLETS, "
-                    + stmt[pos:]
-                )
-        stmt = _set_split_into_tablets(stmt, num_tablets)
-        return convert_primary_key_to_hash_sharding(stmt)
 
     if re.search(r"\bPARTITION\s+OF\b", stmt, re.IGNORECASE):
         # Partition DDL may use: FOR VALUES WITH (...) WITH (COLOCATION = ...).
-        # Append a dedicated colocation WITH clause rather than the first WITH.
         stmt = stmt.rstrip().rstrip(";")
-        stmt = f"{stmt} WITH ({extra});"
+        if not re.search(r"\b(COLOCATION|colocation)\s*=\s*false", stmt, re.IGNORECASE):
+            stmt = f"{stmt} WITH ({colocation_opt});"
+        else:
+            stmt = f"{stmt};"
         return convert_primary_key_to_hash_sharding(stmt)
 
-    if WITH_CLAUSE_RE.search(stmt):
-        stmt = re.sub(
-            r"\bWITH\s*\(",
-            f"WITH ({extra}, ",
-            stmt,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-        return convert_primary_key_to_hash_sharding(stmt)
+    if not re.search(r"\b(COLOCATION|colocation)\s*=\s*false", stmt, re.IGNORECASE):
+        if WITH_CLAUSE_RE.search(stmt):
+            stmt = re.sub(
+                r"\bWITH\s*\(",
+                f"WITH ({colocation_opt}, ",
+                stmt,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        else:
+            stmt = stmt.rstrip().rstrip(";")
+            stmt = f"{stmt} WITH ({colocation_opt})"
 
-    stmt = stmt.rstrip().rstrip(";")
-    stmt = _set_split_into_tablets(f"{stmt} WITH ({extra});", num_tablets)
+    stmt = _ensure_split_clause(stmt, num_tablets)
     return convert_primary_key_to_hash_sharding(stmt)
 
 

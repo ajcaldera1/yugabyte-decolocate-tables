@@ -39,6 +39,21 @@ class TestInjectColocation(unittest.TestCase):
         out = inject_colocation_false(sql)
         self.assertIn("SPLIT INTO 1 TABLETS", out)
         self.assertNotRegex(out, r"(?i)SPLIT\s+INTO\s+8\s+TABLETS")
+        self.assertNotRegex(out, r"(?i)WITH\s*\([^)]*SPLIT\s+INTO")
+
+    def test_split_clause_outside_with_for_yb_metadata(self):
+        sql = (
+            "CREATE TABLE public.test_table (id int PRIMARY KEY (id HASH)) "
+            "WITH (COLOCATION = true, colocation_id = 12345);"
+        )
+        out = inject_colocation_false(sql)
+        self.assertIn("COLOCATION = false", out)
+        self.assertIn("colocation_id = 12345", out)
+        self.assertRegex(
+            out,
+            r"(?i)WITH\s*\([^)]*COLOCATION\s*=\s*false[^)]*\)\s*SPLIT\s+INTO\s+1\s+TABLETS\s*;",
+        )
+        self.assertNotRegex(out, r"(?i)WITH\s*\([^)]*SPLIT\s+INTO")
 
     def test_replaces_true(self):
         sql = "CREATE TABLE t (id int) WITH (COLOCATION = true);"
