@@ -12,4 +12,4 @@
 
 """Migrate colocated YSQL tables to uncollocated and recreate dependent views."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
