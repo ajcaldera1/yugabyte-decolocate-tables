@@ -117,8 +117,43 @@ class TestStripViews(unittest.TestCase):
 
 
 class TestRunYsqlDumpSslEnv(unittest.TestCase):
+    @mock.patch("decolocate_tables.dump.clear_odyssey_pooled_prepares")
     @mock.patch("decolocate_tables.dump.subprocess.run")
-    def test_passes_pgsslmode_in_env(self, mock_run: mock.MagicMock) -> None:
+    def test_clears_odyssey_prepares_before_and_after(
+        self, mock_run: mock.MagicMock, mock_clear: mock.MagicMock
+    ) -> None:
+        mock_run.return_value = mock.MagicMock(returncode=0, stdout="", stderr="")
+        conninfo = {
+            "host": "h",
+            "port": 5433,
+            "dbname": "d",
+            "user": "u",
+            "clear_odyssey_prepares": True,
+        }
+        _run_ysql_dump("/bin/ysql_dump", conninfo, "public.t")
+        self.assertEqual(mock_clear.call_count, 2)
+
+    @mock.patch("decolocate_tables.dump.clear_odyssey_pooled_prepares")
+    @mock.patch("decolocate_tables.dump.subprocess.run")
+    def test_skips_clear_when_disabled(
+        self, mock_run: mock.MagicMock, mock_clear: mock.MagicMock
+    ) -> None:
+        mock_run.return_value = mock.MagicMock(returncode=0, stdout="", stderr="")
+        conninfo = {
+            "host": "h",
+            "port": 5433,
+            "dbname": "d",
+            "user": "u",
+            "clear_odyssey_prepares": False,
+        }
+        _run_ysql_dump("/bin/ysql_dump", conninfo, "public.t")
+        mock_clear.assert_not_called()
+
+    @mock.patch("decolocate_tables.dump.clear_odyssey_pooled_prepares")
+    @mock.patch("decolocate_tables.dump.subprocess.run")
+    def test_passes_pgsslmode_in_env(
+        self, mock_run: mock.MagicMock, mock_clear: mock.MagicMock
+    ) -> None:
         mock_run.return_value = mock.MagicMock(returncode=0, stdout="-- ok\n", stderr="")
         conninfo = {
             "host": "db.example.com",

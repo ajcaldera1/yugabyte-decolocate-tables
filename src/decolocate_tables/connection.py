@@ -152,6 +152,48 @@ def libpq_ssl_env(
     return out
 
 
+# Short connections that run DEALLOCATE help reset Odyssey-pooled backends.
+DEFAULT_ODYSSEY_PREPARE_CLEAR_ATTEMPTS = 3
+
+
+def clear_odyssey_pooled_prepares(
+    conninfo: Mapping[str, object],
+    *,
+    attempts: int = DEFAULT_ODYSSEY_PREPARE_CLEAR_ATTEMPTS,
+) -> None:
+    """
+    Clear ``ysql_dump`` prepared statements left on Odyssey / YSQL CM backends.
+
+    Connection poolers (Odyssey-based YSQL Connection Manager on YugabyteDB
+    managed/cloud) can return a backend that still has ``dumpfunc`` prepared from
+    a prior ``ysql_dump``. Opening brief sessions and running ``DEALLOCATE`` on
+    several pool checkouts increases the chance the next ``ysql_dump`` gets a
+    clean backend.
+    """
+    host = str(conninfo["host"])
+    port = int(conninfo["port"])
+    for attempt in range(1, attempts + 1):
+        conn = None
+        try:
+            conn = connect_psycopg(dict(conninfo), host, port)
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("DEALLOCATE ALL")
+        except Exception as exc:
+            logger.warning(
+                "Could not clear pooled ysql_dump prepared statements "
+                "(attempt %d/%d on %s:%s): %s",
+                attempt,
+                attempts,
+                host,
+                port,
+                exc,
+            )
+        finally:
+            if conn is not None:
+                conn.close()
+
+
 def connect_psycopg(conninfo: dict, host: str, port: int):
     try:
         import psycopg

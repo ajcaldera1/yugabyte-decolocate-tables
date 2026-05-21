@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SSL/TLS support: `--sslmode`, `--sslcert`, `--sslkey`, `--sslrootcert`, and
   `--sslcrl` CLI flags with `PGSSL*` environment variable fallbacks for psycopg
   and `ysql_dump`
+- Clear Odyssey / YSQL connection manager pooled `ysql_dump` prepared statements
+  (`DEALLOCATE ALL` before and after each `ysql_dump`; disable with
+  `--no-clear-odyssey-prepares`)
 
 ## [0.1.0] - 2026-05-20
 

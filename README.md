@@ -77,6 +77,12 @@ Each `--ssl*` flag falls back to the matching `PGSSL*` environment variable when
 With `verify-full`, hostnames from `yb_servers()` used for parallel `COPY` must match the
 certificate SAN; otherwise use `verify-ca` or `require`.
 
+### Odyssey / YSQL connection manager
+
+On YugabyteDB managed and other deployments that use the Odyssey-based [YSQL Connection Manager](https://docs.yugabyte.com/stable/additional-features/connection-manager-ysql/), repeated `ysql_dump` runs can fail with `prepared statement "dumpfunc" already exists` when a pooled backend still holds `ysql_dump` prepared statements.
+
+By default, the tool runs `DEALLOCATE ALL` on several short-lived connections before and after each `ysql_dump` to reset pooled backends. Use `--no-clear-odyssey-prepares` only when connecting directly to YSQL without a pooler.
+
 ### Options
 
 | Flag | Description |
@@ -87,6 +93,7 @@ certificate SAN; otherwise use `verify-ca` or `require`.
 | `--backup-suffix SUFFIX` | Suffix for renamed backup tables (default `_colocated_bak`) |
 | `--split-into-tablets N` | `SPLIT INTO N TABLETS` on new uncollocated tables (default: `1`) |
 | `--ysql-dump PATH` | Path to `ysql_dump` binary |
+| `--no-clear-odyssey-prepares` | Skip DEALLOCATE before/after each `ysql_dump` (direct YSQL, no pooler) |
 | `--sslmode MODE` | libpq SSL mode (`disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`); default: `$PGSSLMODE` |
 | `--sslcert PATH` | Client certificate; default: `$PGSSLCERT` |
 | `--sslkey PATH` | Client private key; default: `$PGSSLKEY` |

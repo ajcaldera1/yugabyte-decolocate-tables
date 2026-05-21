@@ -117,6 +117,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to ysql_dump binary (default: search PATH)",
     )
     parser.add_argument(
+        "--no-clear-odyssey-prepares",
+        action="store_true",
+        help=(
+            "Do not run DEALLOCATE before/after each ysql_dump (for direct YSQL "
+            "without Odyssey/connection manager pooling)"
+        ),
+    )
+    parser.add_argument(
         "--work-dir",
         default=None,
         help="Directory for captured DDL and manifest (default: temp dir)",
@@ -262,6 +270,7 @@ def run(argv: Optional[List[str]] = None) -> int:
         "dbname": args.dbname,
         "user": args.user,
         "password": args.password,
+        "clear_odyssey_prepares": not args.no_clear_odyssey_prepares,
         **ssl,
     }
 

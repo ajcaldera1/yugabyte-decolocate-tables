@@ -19,7 +19,7 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from decolocate_tables.connection import libpq_ssl_env
+from decolocate_tables.connection import clear_odyssey_pooled_prepares, libpq_ssl_env
 from decolocate_tables.models import QualifiedName, TableInfo, ViewInfo
 
 logger = logging.getLogger(__name__)
@@ -79,6 +79,9 @@ def _run_ysql_dump(
     table_pattern: str,
     schema_only: bool = True,
 ) -> str:
+    if conninfo.get("clear_odyssey_prepares", True):
+        clear_odyssey_pooled_prepares(conninfo)
+
     env = libpq_ssl_env(conninfo, os.environ.copy())
     if conninfo.get("password"):
         env["PGPASSWORD"] = conninfo["password"]
@@ -108,6 +111,10 @@ def _run_ysql_dump(
         raise DumpError(
             f"ysql_dump failed for {table_pattern}:\n{result.stderr or result.stdout}"
         )
+
+    if conninfo.get("clear_odyssey_prepares", True):
+        clear_odyssey_pooled_prepares(conninfo)
+
     return result.stdout
 
 

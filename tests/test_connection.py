@@ -13,10 +13,12 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from decolocate_tables.connection import (
     YbServer,
     append_ssl_to_dsn,
+    clear_odyssey_pooled_prepares,
     libpq_ssl_env,
     resolve_ssl_options,
     server_for_bucket,
@@ -89,6 +91,31 @@ class TestLibpqSslEnv(unittest.TestCase):
         base = {"HOME": "/tmp"}
         env = libpq_ssl_env({}, base)
         self.assertEqual(env, base)
+
+
+class TestClearOdysseyPooledPrepares(unittest.TestCase):
+    @mock.patch("decolocate_tables.connection.connect_psycopg")
+    def test_deallocate_all_on_each_attempt(self, mock_connect) -> None:
+        cur = mock.MagicMock()
+        conn = mock.MagicMock()
+        conn.__enter__ = mock.MagicMock(return_value=conn)
+        conn.__exit__ = mock.MagicMock(return_value=False)
+        conn.cursor.return_value.__enter__ = mock.MagicMock(return_value=cur)
+        conn.cursor.return_value.__exit__ = mock.MagicMock(return_value=False)
+        mock_connect.return_value = conn
+
+        conninfo = {
+            "host": "pool.example.com",
+            "port": 5433,
+            "dbname": "db",
+            "user": "u",
+        }
+        clear_odyssey_pooled_prepares(conninfo, attempts=2)
+
+        self.assertEqual(mock_connect.call_count, 2)
+        self.assertEqual(cur.execute.call_count, 2)
+        cur.execute.assert_called_with("DEALLOCATE ALL")
+        self.assertEqual(conn.close.call_count, 2)
 
 
 class TestServerForBucket(unittest.TestCase):
