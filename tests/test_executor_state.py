@@ -28,9 +28,65 @@ from decolocate_tables.executor import (
     _pgcode,
     _rollback_table_phase1,
     _run_in_transaction,
+    _verify_row_counts,
+    _verify_uncollocated,
     rollback_failed_migration,
 )
 from decolocate_tables.models import MigrationPlan, QualifiedName, TableInfo, ViewInfo
+
+
+class TestVerifyAfterCopy(unittest.TestCase):
+    @patch("decolocate_tables.executor.get_row_count")
+    def test_verify_row_counts_ok(self, mock_count) -> None:
+        mock_count.side_effect = [100, 100]
+        cur = MagicMock()
+        table = TableInfo(
+            qualified=QualifiedName("public", "t"),
+            oid=1,
+            relkind="r",
+            is_colocated=True,
+            backup_name="t_colocated_bak",
+        )
+        _verify_row_counts(cur, table, "t_colocated_bak")
+        self.assertEqual(mock_count.call_count, 2)
+
+    @patch("decolocate_tables.executor.get_row_count")
+    def test_verify_row_counts_mismatch(self, mock_count) -> None:
+        mock_count.side_effect = [100, 99]
+        table = TableInfo(
+            qualified=QualifiedName("public", "t"),
+            oid=1,
+            relkind="r",
+            is_colocated=True,
+            backup_name="t_colocated_bak",
+        )
+        with self.assertRaises(ExecutorError) as ctx:
+            _verify_row_counts(MagicMock(), table, "t_colocated_bak")
+        self.assertIn("Row count mismatch", str(ctx.exception))
+
+    def test_verify_uncollocated_ok(self) -> None:
+        cur = MagicMock()
+        cur.fetchone.return_value = (False,)
+        table = TableInfo(
+            qualified=QualifiedName("public", "t"),
+            oid=1,
+            relkind="r",
+            is_colocated=False,
+        )
+        _verify_uncollocated(cur, table)
+
+    def test_verify_uncollocated_still_colocated(self) -> None:
+        cur = MagicMock()
+        cur.fetchone.return_value = (True,)
+        table = TableInfo(
+            qualified=QualifiedName("public", "t"),
+            oid=1,
+            relkind="r",
+            is_colocated=True,
+        )
+        with self.assertRaises(ExecutorError) as ctx:
+            _verify_uncollocated(cur, table)
+        self.assertIn("still colocated", str(ctx.exception))
 
 
 class TestRollbackTablePhase1(unittest.TestCase):

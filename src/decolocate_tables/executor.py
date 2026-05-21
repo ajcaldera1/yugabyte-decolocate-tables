@@ -192,6 +192,53 @@ def _execute_post_create_sql(
             _execute_one_idempotent(cur, stmt, label)
 
 
+_VERIFY_COLOCATION_SQL = """
+SELECT (SELECT is_colocated FROM yb_table_properties(c.oid)) AS is_colocated
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = %(schema)s
+  AND c.relname = %(name)s
+  AND c.relkind = 'r';
+"""
+
+
+def _verify_row_counts(cur, table: TableInfo, backup_name: str) -> None:
+    """Ensure the migrated table has the same row count as the backup."""
+    qn = table.qualified
+    target_count = get_row_count(cur, qn.schema, qn.name)
+    backup_count = get_row_count(cur, qn.schema, backup_name)
+    if target_count != backup_count:
+        raise ExecutorError(
+            f"Row count mismatch for {qn}: target has {target_count:,} rows, "
+            f"backup {backup_name} has {backup_count:,} rows"
+        )
+    logger.info(
+        "Verified row counts for %s: %,d rows match backup %s",
+        qn,
+        target_count,
+        backup_name,
+    )
+
+
+def _verify_uncollocated(cur, table: TableInfo) -> None:
+    """Ensure yb_table_properties reports the table is no longer colocated."""
+    qn = table.qualified
+    cur.execute(
+        _VERIFY_COLOCATION_SQL,
+        {"schema": qn.schema, "name": qn.name},
+    )
+    row = cur.fetchone()
+    if row is None:
+        raise ExecutorError(f"Cannot verify colocation for {qn}: table not found")
+    is_colocated = row[0]
+    if is_colocated is not False:
+        raise ExecutorError(
+            f"{qn} is still colocated (is_colocated={is_colocated!r}); "
+            "expected uncollocated table after migration"
+        )
+    logger.info("Verified %s is uncollocated (is_colocated=false)", qn)
+
+
 def _run_in_transaction(
     conn,
     lock_timeout: Optional[str],
