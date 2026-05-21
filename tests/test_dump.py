@@ -11,8 +11,10 @@
 # under the License.
 
 import unittest
+from unittest import mock
 
 from decolocate_tables.dump import (
+    _run_ysql_dump,
     convert_primary_key_to_hash_sharding,
     inject_colocation_false,
     rewrite_table_name_in_sql,
@@ -112,6 +114,22 @@ class TestStripViews(unittest.TestCase):
         self.assertIn("CREATE TABLE", out)
         self.assertNotIn("CREATE VIEW", out)
         self.assertIn("CREATE INDEX", out)
+
+
+class TestRunYsqlDumpSslEnv(unittest.TestCase):
+    @mock.patch("decolocate_tables.dump.subprocess.run")
+    def test_passes_pgsslmode_in_env(self, mock_run: mock.MagicMock) -> None:
+        mock_run.return_value = mock.MagicMock(returncode=0, stdout="-- ok\n", stderr="")
+        conninfo = {
+            "host": "db.example.com",
+            "port": 5433,
+            "dbname": "mydb",
+            "user": "yugabyte",
+            "sslmode": "require",
+        }
+        _run_ysql_dump("/bin/ysql_dump", conninfo, "public.t")
+        env = mock_run.call_args.kwargs["env"]
+        self.assertEqual(env["PGSSLMODE"], "require")
 
 
 class TestRewriteTableName(unittest.TestCase):

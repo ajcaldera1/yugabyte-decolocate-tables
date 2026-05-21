@@ -19,6 +19,7 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from decolocate_tables.connection import libpq_ssl_env
 from decolocate_tables.models import QualifiedName, TableInfo, ViewInfo
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ def _run_ysql_dump(
     table_pattern: str,
     schema_only: bool = True,
 ) -> str:
-    env = os.environ.copy()
+    env = libpq_ssl_env(conninfo, os.environ.copy())
     if conninfo.get("password"):
         env["PGPASSWORD"] = conninfo["password"]
 

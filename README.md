@@ -56,6 +56,27 @@ Equivalent:
 python -m decolocate_tables --dbname mydb --table public.t1
 ```
 
+### SSL connections
+
+TLS settings follow [libpq](https://www.postgresql.org/docs/current/libpq-ssl.html) conventions.
+Each `--ssl*` flag falls back to the matching `PGSSL*` environment variable when omitted.
+Settings apply to all psycopg connections (including parallel `COPY` workers on `yb_servers()`
+nodes) and to `ysql_dump`.
+
+```bash
+decolocate-tables \
+  --host mycluster.example.com --port 5433 \
+  --dbname mydb --user admin --password "$PGPASSWORD" \
+  --sslmode verify-full --sslrootcert /path/to/ca.crt \
+  --table public.orders --execute
+```
+
+Each `--ssl*` flag falls back to the matching `PGSSL*` environment variable when omitted
+(for example `export PGSSLMODE=require`).
+
+With `verify-full`, hostnames from `yb_servers()` used for parallel `COPY` must match the
+certificate SAN; otherwise use `verify-ca` or `require`.
+
 ### Options
 
 | Flag | Description |
@@ -66,6 +87,11 @@ python -m decolocate_tables --dbname mydb --table public.t1
 | `--backup-suffix SUFFIX` | Suffix for renamed backup tables (default `_colocated_bak`) |
 | `--split-into-tablets N` | `SPLIT INTO N TABLETS` on new uncollocated tables (default: `1`) |
 | `--ysql-dump PATH` | Path to `ysql_dump` binary |
+| `--sslmode MODE` | libpq SSL mode (`disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`); default: `$PGSSLMODE` |
+| `--sslcert PATH` | Client certificate; default: `$PGSSLCERT` |
+| `--sslkey PATH` | Client private key; default: `$PGSSLKEY` |
+| `--sslrootcert PATH` | Trusted CA bundle; default: `$PGSSLROOTCERT` |
+| `--sslcrl PATH` | Certificate revocation list; default: `$PGSSLCRL` |
 | `--lock-timeout` | `SET lock_timeout` during migration (default `30s`) |
 | `--copy-threads N` | Parallel piped `COPY` workers per table (default `4`) |
 | `--no-analyze-if-had-stats` | Skip post-migrate `ANALYZE` (for clusters with auto-analyze) |

@@ -13,10 +13,28 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Mapping, Optional
 
 logger = logging.getLogger(__name__)
+
+# libpq SSL connection parameters (keyword DSN + PG* env vars).
+SSL_CONNINFO_KEYS = ("sslmode", "sslcert", "sslkey", "sslrootcert", "sslcrl")
+
+SSL_ENV_VARS = {
+    "sslmode": "PGSSLMODE",
+    "sslcert": "PGSSLCERT",
+    "sslkey": "PGSSLKEY",
+    "sslrootcert": "PGSSLROOTCERT",
+    "sslcrl": "PGSSLCRL",
+}
+
+VALID_SSLMODES = frozenset(
+    {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
+)
+
+SSLMODE_CHOICES = tuple(sorted(VALID_SSLMODES))
 
 YB_SERVERS_SQL = """
 SELECT DISTINCT host, port::int AS port
@@ -77,6 +95,63 @@ def server_for_bucket(
     return servers[base]
 
 
+def _format_dsn_value(value: str) -> str:
+    """Quote libpq DSN values that contain whitespace."""
+    if any(ch.isspace() for ch in value):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
+
+
+def resolve_ssl_options(
+    options: Mapping[str, Optional[str]],
+    env: Optional[Mapping[str, str]] = None,
+) -> Dict[str, str]:
+    """
+    Merge SSL settings from explicit CLI values and ``PGSSL*`` env vars.
+
+    Precedence: non-empty CLI value wins; otherwise use env if set; otherwise omit.
+    """
+    if env is None:
+        env = os.environ
+    out: Dict[str, str] = {}
+    for key in SSL_CONNINFO_KEYS:
+        cli_val = options.get(key)
+        if cli_val is not None and cli_val != "":
+            out[key] = cli_val
+            continue
+        env_val = env.get(SSL_ENV_VARS[key], "")
+        if env_val:
+            out[key] = env_val
+    return out
+
+
+def append_ssl_to_dsn(dsn: str, conninfo: Mapping[str, object]) -> str:
+    """Append ``sslmode``, ``sslrootcert``, etc. to a libpq keyword DSN."""
+    for key in SSL_CONNINFO_KEYS:
+        value = conninfo.get(key)
+        if value:
+            dsn += f" {key}={_format_dsn_value(str(value))}"
+    return dsn
+
+
+def libpq_ssl_env(
+    conninfo: Mapping[str, object],
+    env: Optional[Mapping[str, str]] = None,
+) -> Dict[str, str]:
+    """
+    Copy SSL settings from ``conninfo`` into ``PGSSL*`` variables.
+
+    Used for ``ysql_dump`` and other libpq subprocess tools.
+    """
+    out = dict(env) if env is not None else dict(os.environ)
+    for key in SSL_CONNINFO_KEYS:
+        value = conninfo.get(key)
+        if value:
+            out[SSL_ENV_VARS[key]] = str(value)
+    return out
+
+
 def connect_psycopg(conninfo: dict, host: str, port: int):
     try:
         import psycopg
@@ -89,7 +164,7 @@ def connect_psycopg(conninfo: dict, host: str, port: int):
     )
     if conninfo.get("password"):
         dsn += f" password={conninfo['password']}"
-    return psycopg.connect(dsn)
+    return psycopg.connect(append_ssl_to_dsn(dsn, conninfo))
 
 
 class ConnectionFactory:

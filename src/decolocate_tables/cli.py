@@ -21,7 +21,11 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 
-from decolocate_tables.connection import ConnectionFactory
+from decolocate_tables.connection import (
+    ConnectionFactory,
+    SSLMODE_CHOICES,
+    resolve_ssl_options,
+)
 from decolocate_tables.copy_data import COPY_ROW_THRESHOLD, data_copy_method, get_row_count
 from decolocate_tables.discovery import DiscoveryError, discover
 from decolocate_tables.statistics import table_has_statistics
@@ -64,6 +68,37 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dbname", required=True)
     parser.add_argument("--user", default="yugabyte")
     parser.add_argument("--password", default=os.environ.get("PGPASSWORD", ""))
+    parser.add_argument(
+        "--sslmode",
+        choices=SSLMODE_CHOICES,
+        default=None,
+        metavar="MODE",
+        help="libpq sslmode; if omitted, uses $PGSSLMODE when set",
+    )
+    parser.add_argument(
+        "--sslcert",
+        default=None,
+        metavar="PATH",
+        help="Client SSL certificate file; if omitted, uses $PGSSLCERT when set",
+    )
+    parser.add_argument(
+        "--sslkey",
+        default=None,
+        metavar="PATH",
+        help="Client SSL private key file; if omitted, uses $PGSSLKEY when set",
+    )
+    parser.add_argument(
+        "--sslrootcert",
+        default=None,
+        metavar="PATH",
+        help="Trusted CA certificate file; if omitted, uses $PGSSLROOTCERT when set",
+    )
+    parser.add_argument(
+        "--sslcrl",
+        default=None,
+        metavar="PATH",
+        help="SSL certificate revocation list file; if omitted, uses $PGSSLCRL when set",
+    )
     parser.add_argument(
         "--table",
         action="append",
@@ -211,12 +246,23 @@ def run(argv: Optional[List[str]] = None) -> int:
     if not table_names:
         raise SystemExit("At least one table is required (--table SCHEMA.TABLE)")
 
+    ssl = resolve_ssl_options(
+        {
+            "sslmode": args.sslmode,
+            "sslcert": args.sslcert,
+            "sslkey": args.sslkey,
+            "sslrootcert": args.sslrootcert,
+            "sslcrl": args.sslcrl,
+        }
+    )
+
     conninfo = {
         "host": args.host,
         "port": args.port,
         "dbname": args.dbname,
         "user": args.user,
         "password": args.password,
+        **ssl,
     }
 
     ysql_dump = _find_ysql_dump(args.ysql_dump)
