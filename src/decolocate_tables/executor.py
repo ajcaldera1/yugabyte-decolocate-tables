@@ -213,9 +213,9 @@ def _verify_row_counts(cur, table: TableInfo, backup_name: str) -> None:
             f"backup {backup_name} has {backup_count:,} rows"
         )
     logger.info(
-        "Verified row counts for %s: %,d rows match backup %s",
+        "Verified row counts for %s: %s rows match backup %s",
         qn,
-        target_count,
+        f"{target_count:,}",
         backup_name,
     )
 
