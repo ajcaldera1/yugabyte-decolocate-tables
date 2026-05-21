@@ -49,7 +49,7 @@ class TestInjectColocation(unittest.TestCase):
         )
         out = inject_colocation_false(sql)
         self.assertIn("COLOCATION = false", out)
-        self.assertIn("colocation_id = 12345", out)
+        self.assertNotRegex(out, r"(?i)colocation_id\s*=")
         self.assertRegex(
             out,
             r"(?i)WITH\s*\([^)]*COLOCATION\s*=\s*false[^)]*\)\s*SPLIT\s+INTO\s+1\s+TABLETS\s*;",

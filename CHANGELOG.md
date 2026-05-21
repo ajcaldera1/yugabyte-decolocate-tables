@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix PRIMARY KEY ``recordid ASC`` rewrite corrupting column names (e.g. ``recordi HASHd``)
 - Strip psql meta-commands (``\\if``, etc.) from ``ysql_dump`` view/table DDL
 - Only track dropped views for rollback after Phase 1 transaction commits
+- Strip ``colocation_id`` from uncollocated ``CREATE TABLE`` DDL (YSQL rejects it
+  with ``COLOCATION = false``)
 
 ## [0.1.0] - 2026-05-20
 

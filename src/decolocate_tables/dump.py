@@ -34,6 +34,12 @@ COLOCATION_TRUE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ysql_dump --include-yb-metadata may emit colocation_id; invalid with COLOCATION=false.
+COLOCATION_ID_PROP_RE = re.compile(
+    r",?\s*\b(?:COLOCATION_ID|colocation_id)\s*=\s*[^,)]+",
+    re.IGNORECASE,
+)
+
 WITH_CLAUSE_RE = re.compile(r"\bWITH\s*\(", re.IGNORECASE)
 
 SPLIT_INTO_TABLETS_RE = re.compile(
@@ -142,6 +148,12 @@ def convert_primary_key_to_hash_sharding(stmt: str) -> str:
     return stmt
 
 
+def strip_colocation_id_properties(stmt: str) -> str:
+    """Remove ``colocation_id`` / ``COLOCATION_ID`` from table storage options."""
+    stmt = COLOCATION_ID_PROP_RE.sub("", stmt)
+    return _normalize_with_list_commas(stmt)
+
+
 def _normalize_with_list_commas(stmt: str) -> str:
     """Tidy ``WITH (...)`` lists after removing misplaced clauses."""
     stmt = re.sub(r"\(\s*,", "(", stmt)
@@ -191,7 +203,7 @@ def _inject_colocation_into_statement(
             stmt = stmt.rstrip().rstrip(";")
             stmt = f"{stmt} WITH ({colocation_opt})"
 
-    stmt = _ensure_split_clause(stmt, num_tablets)
+    stmt = strip_colocation_id_properties(_ensure_split_clause(stmt, num_tablets))
     return convert_primary_key_to_hash_sharding(stmt)
 
 
