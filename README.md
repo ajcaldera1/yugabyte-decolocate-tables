@@ -81,7 +81,7 @@ certificate SAN; otherwise use `verify-ca` or `require`.
 
 On YugabyteDB managed and other deployments that use the Odyssey-based [YSQL Connection Manager](https://docs.yugabyte.com/stable/additional-features/connection-manager-ysql/), repeated `ysql_dump` runs can fail with `prepared statement "dumpfunc" already exists` when a pooled backend still holds `ysql_dump` prepared statements.
 
-By default, the tool runs `DEALLOCATE ALL` on several short-lived connections before and after each `ysql_dump` to reset pooled backends. Use `--no-clear-odyssey-prepares` only when connecting directly to YSQL without a pooler.
+By default, the tool runs `DEALLOCATE ALL` on several short-lived connections once before and once after the full DDL capture phase (not per table/view). Use `--no-clear-odyssey-prepares` only when connecting directly to YSQL without a pooler.
 
 ### Options
 
@@ -93,7 +93,9 @@ By default, the tool runs `DEALLOCATE ALL` on several short-lived connections be
 | `--backup-suffix SUFFIX` | Suffix for renamed backup tables (default `_colocated_bak`) |
 | `--split-into-tablets N` | `SPLIT INTO N TABLETS` on new uncollocated tables (default: `1`) |
 | `--ysql-dump PATH` | Path to `ysql_dump` binary |
-| `--no-clear-odyssey-prepares` | Skip DEALLOCATE before/after each `ysql_dump` (direct YSQL, no pooler) |
+| `--ddl-capture-mode MODE` | `batched` (default) or `per-object` for `ysql_dump` during planning |
+| `--ddl-capture-batch-size N` | Max objects per batched `ysql_dump` (default `32`) |
+| `--no-clear-odyssey-prepares` | Skip DEALLOCATE before/after DDL capture (direct YSQL, no pooler) |
 | `--no-rollback-on-failure` | Do not restore tables/views if `--execute` fails after Phase 1 |
 | `--sslmode MODE` | libpq SSL mode (`disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`); default: `$PGSSLMODE` |
 | `--sslcert PATH` | Client certificate; default: `$PGSSLCERT` |
@@ -110,7 +112,7 @@ By default, the tool runs `DEALLOCATE ALL` on several short-lived connections be
 1. Validates tables are colocated and the database is colocated
 2. Aborts on inbound FKs from tables outside the set or dependent materialized views
 3. Discovers all dependent **regular views** (including view-on-view chains)
-4. Captures full table DDL via `ysql_dump --schema-only --include-yb-metadata`
+4. Captures table and view DDL via batched `ysql_dump --schema-only --include-yb-metadata` (one or few invocations per object type)
 5. Injects `COLOCATION = false` into `CREATE TABLE` statements
 6. On `--execute`: drops views, recreates each table uncollocated, copies data in parallel via piped `COPY` (partitioned by `mod(yb_hash_code(<pk>), N)`), recreates views
 

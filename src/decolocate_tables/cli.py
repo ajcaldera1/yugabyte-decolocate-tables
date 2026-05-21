@@ -31,9 +31,10 @@ from decolocate_tables.copy_data import COPY_ROW_THRESHOLD, data_copy_method, ge
 from decolocate_tables.discovery import DiscoveryError, discover
 from decolocate_tables.statistics import table_has_statistics
 from decolocate_tables.dump import (
-    capture_table_ddl,
-    capture_table_ddl_resume,
-    capture_view_ddl,
+    DDL_CAPTURE_MODE_BATCHED,
+    DDL_CAPTURE_MODE_PER_OBJECT,
+    DEFAULT_DDL_CAPTURE_BATCH_SIZE,
+    capture_migration_ddl,
 )
 from decolocate_tables.executor import ExecutorError, execute_plan
 from decolocate_tables.manifest import (
@@ -121,8 +122,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-clear-odyssey-prepares",
         action="store_true",
         help=(
-            "Do not run DEALLOCATE before/after each ysql_dump (for direct YSQL "
+            "Do not run DEALLOCATE before/after DDL capture (for direct YSQL "
             "without Odyssey/connection manager pooling)"
+        ),
+    )
+    parser.add_argument(
+        "--ddl-capture-mode",
+        choices=(DDL_CAPTURE_MODE_BATCHED, DDL_CAPTURE_MODE_PER_OBJECT),
+        default=DDL_CAPTURE_MODE_BATCHED,
+        help=(
+            "How to run ysql_dump during planning: batched combines multiple "
+            "tables/views per invocation (default); per-object uses one dump each"
+        ),
+    )
+    parser.add_argument(
+        "--ddl-capture-batch-size",
+        type=int,
+        default=DEFAULT_DDL_CAPTURE_BATCH_SIZE,
+        metavar="N",
+        help=(
+            "Maximum tables or views per batched ysql_dump when "
+            "--ddl-capture-mode=batched (default: "
+            f"{DEFAULT_DDL_CAPTURE_BATCH_SIZE})"
         ),
     )
     parser.add_argument(
@@ -350,30 +371,19 @@ def run(argv: Optional[List[str]] = None) -> int:
                     table.had_statistics = None
                     table.will_analyze = False
 
-        for table in tables:
-            if table.resuming:
-                if not table.backup_name:
-                    raise DiscoveryError(
-                        f"Resuming table {table.qualified} is missing backup_name"
-                    )
-                capture_table_ddl_resume(
-                    table,
-                    work_dir,
-                    ysql_dump,
-                    conninfo,
-                    table.backup_name,
-                )
-            else:
-                capture_table_ddl(
-                    table,
-                    work_dir,
-                    ysql_dump,
-                    conninfo,
-                    split_into_tablets=args.split_into_tablets,
-                )
+        if args.ddl_capture_batch_size < 1:
+            raise SystemExit("--ddl-capture-batch-size must be >= 1")
 
-        for view in views_create:
-            capture_view_ddl(view, work_dir, ysql_dump, conninfo)
+        capture_migration_ddl(
+            tables,
+            views_create,
+            work_dir,
+            ysql_dump,
+            conninfo,
+            split_into_tablets=args.split_into_tablets,
+            capture_mode=args.ddl_capture_mode,
+            batch_size=args.ddl_capture_batch_size,
+        )
 
         plan = MigrationPlan(
             tables=tables,

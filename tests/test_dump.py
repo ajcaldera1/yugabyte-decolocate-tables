@@ -11,21 +11,26 @@
 # under the License.
 
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from decolocate_tables.dump import (
     _run_ysql_dump,
     _split_sql_statements,
+    capture_migration_ddl,
     convert_primary_key_to_hash_sharding,
     inject_colocation_false,
     is_executable_sql_statement,
     iter_executable_statements,
+    partition_table_dump,
+    partition_view_dump,
     rewrite_table_name_in_sql,
     split_schema_dump,
     strip_psql_meta_commands,
     strip_view_statements,
     suffix_new_table_object_names,
 )
+from decolocate_tables.models import QualifiedName, TableInfo, ViewInfo
 
 
 class TestInjectColocation(unittest.TestCase):
@@ -262,6 +267,79 @@ class TestStripViews(unittest.TestCase):
         self.assertIn("CREATE INDEX", out)
 
 
+class TestPartitionBatchedDump(unittest.TestCase):
+    def test_partition_two_tables(self):
+        sql = (
+            "CREATE TABLE public.a (id int);\n"
+            "CREATE INDEX a_i ON public.a (id);\n"
+            "CREATE TABLE public.b (id int);\n"
+            "ALTER TABLE ONLY public.b ADD CONSTRAINT b_pk PRIMARY KEY (id);"
+        )
+        parts = partition_table_dump(
+            sql,
+            [QualifiedName("public", "a"), QualifiedName("public", "b")],
+        )
+        self.assertIn("CREATE TABLE public.a", parts["public.a"])
+        self.assertIn("CREATE INDEX", parts["public.a"])
+        self.assertIn("CREATE TABLE public.b", parts["public.b"])
+        self.assertIn("ALTER TABLE", parts["public.b"])
+
+    def test_partition_mixed_case_pattern(self):
+        sql = 'CREATE TABLE public."FBNK_CURRENCY" (id int);'
+        parts = partition_table_dump(
+            sql,
+            [QualifiedName("public", "FBNK_CURRENCY")],
+        )
+        self.assertIn("FBNK_CURRENCY", parts["public.FBNK_CURRENCY"])
+
+    def test_partition_views(self):
+        sql = (
+            "CREATE VIEW public.v1 AS SELECT 1;\n"
+            "CREATE VIEW public.v2 AS SELECT 2;"
+        )
+        parts = partition_view_dump(
+            sql,
+            [QualifiedName("public", "v1"), QualifiedName("public", "v2")],
+        )
+        self.assertIn("CREATE VIEW public.v1", parts["public.v1"])
+        self.assertIn("CREATE VIEW public.v2", parts["public.v2"])
+
+
+class TestCaptureMigrationDdl(unittest.TestCase):
+    @mock.patch("decolocate_tables.dump.clear_odyssey_pooled_prepares")
+    @mock.patch("decolocate_tables.dump._run_ysql_dump")
+    def test_session_clear_once_batched(
+        self, mock_dump: mock.MagicMock, mock_clear: mock.MagicMock
+    ) -> None:
+        mock_dump.return_value = "CREATE TABLE public.t (id int);"
+        table = TableInfo(
+            qualified=QualifiedName("public", "t"),
+            oid=1,
+            relkind="r",
+            is_colocated=True,
+        )
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work_dir = Path(tmp)
+            conninfo = {
+                "host": "h",
+                "port": 5433,
+                "dbname": "d",
+                "user": "u",
+                "clear_odyssey_prepares": True,
+            }
+            capture_migration_ddl(
+                [table],
+                [],
+                work_dir,
+                "/bin/ysql_dump",
+                conninfo,
+            )
+            self.assertEqual(mock_clear.call_count, 2)
+            self.assertEqual(mock_dump.call_count, 1)
+
+
 class TestRunYsqlDumpSslEnv(unittest.TestCase):
     @mock.patch("decolocate_tables.dump.clear_odyssey_pooled_prepares")
     @mock.patch("decolocate_tables.dump.subprocess.run")
@@ -294,6 +372,29 @@ class TestRunYsqlDumpSslEnv(unittest.TestCase):
         }
         _run_ysql_dump("/bin/ysql_dump", conninfo, "public.t")
         mock_clear.assert_not_called()
+
+    @mock.patch("decolocate_tables.dump.clear_odyssey_pooled_prepares")
+    @mock.patch("decolocate_tables.dump.subprocess.run")
+    def test_multiple_table_patterns(
+        self, mock_run: mock.MagicMock, mock_clear: mock.MagicMock
+    ) -> None:
+        mock_run.return_value = mock.MagicMock(returncode=0, stdout="", stderr="")
+        conninfo = {
+            "host": "h",
+            "port": 5433,
+            "dbname": "d",
+            "user": "u",
+            "clear_odyssey_prepares": False,
+        }
+        _run_ysql_dump(
+            "/bin/ysql_dump",
+            conninfo,
+            ["public.a", 'public."B"'],
+        )
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd.count("-t"), 2)
+        self.assertIn("public.a", cmd)
+        self.assertIn('public."B"', cmd)
 
     @mock.patch("decolocate_tables.dump.clear_odyssey_pooled_prepares")
     @mock.patch("decolocate_tables.dump.subprocess.run")

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Batched ``ysql_dump`` for DDL capture: multiple ``-t`` patterns per invocation
+  (default ``--ddl-capture-mode batched``)
+- Session-level Odyssey ``DEALLOCATE`` before/after all captures instead of per dump
+- ``--ddl-capture-mode`` (``batched`` | ``per-object``) and ``--ddl-capture-batch-size``
+
 ## [0.2.0] - 2026-05-21
 
 ### Added
