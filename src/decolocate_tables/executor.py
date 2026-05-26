@@ -30,7 +30,7 @@ from decolocate_tables.dump import (
     iter_executable_statements,
     strip_psql_meta_commands,
 )
-from decolocate_tables.models import MigrationPlan, TableInfo
+from decolocate_tables.models import MigrationPlan, TableInfo, derive_backup_name
 from decolocate_tables.progress import (
     CreateIndexProgressBar,
     PhaseReporter,
@@ -275,16 +275,14 @@ def _run_in_transaction(
 
 # ── State detection ────────────────────────────────────────────────────────────
 
-def _detect_table_state(
-    cur, schema: str, name: str, backup_suffix: str
-) -> str:
+def _detect_table_state(cur, schema: str, name: str) -> str:
     """
     Determine the migration state of a single table by inspecting pg_class.
 
     Returns one of _STATE_READY, _STATE_PHASE1_DONE, or _STATE_COMPLETE.
     Raises ExecutorError for unrecognised / corrupt states.
     """
-    backup = f"{name}{backup_suffix}"
+    backup = derive_backup_name(name)
     cur.execute(
         _DETECT_STATE_SQL,
         {"schema": schema, "names": [name, backup]},
@@ -371,10 +369,10 @@ def _record_source_statistics(
 
 # ── Phase helpers ──────────────────────────────────────────────────────────────
 
-def _create_empty_replacement(cur, table: TableInfo, backup_suffix: str) -> None:
+def _create_empty_replacement(cur, table: TableInfo) -> None:
     """Rename source to backup and create an uncollocated shell using captured DDL."""
     qn = table.qualified
-    backup_name = f"{qn.name}{backup_suffix}"
+    backup_name = table.backup_name or derive_backup_name(qn.name)
     table.backup_name = backup_name
 
     cur.execute(
@@ -538,7 +536,6 @@ def rollback_failed_migration(
     plan: MigrationPlan,
     states: Dict[str, str],
     dropped_views: set[str],
-    backup_suffix: str,
     *,
     views_recreated: bool,
     lock_timeout: Optional[str] = None,
@@ -581,7 +578,6 @@ def rollback_failed_migration(
                     cur,
                     table.qualified.schema,
                     table.qualified.name,
-                    backup_suffix,
                 )
                 if state != _STATE_PHASE1_DONE:
                     logger.warning(
@@ -663,7 +659,6 @@ def _run_post_migrate_analyze(
 def execute_plan(
     conn,
     plan: MigrationPlan,
-    backup_suffix: str,
     connect_fn: Callable[[], object],
     copy_threads: int = 4,
     lock_timeout: Optional[str] = None,
@@ -688,8 +683,8 @@ def execute_plan(
         with conn.cursor() as cur:
             for table in plan.tables:
                 qn = table.qualified
-                table.backup_name = f"{qn.name}{backup_suffix}"
-                state = _detect_table_state(cur, qn.schema, qn.name, backup_suffix)
+                table.backup_name = table.backup_name or derive_backup_name(qn.name)
+                state = _detect_table_state(cur, qn.schema, qn.name)
                 states[qn.name] = state
                 logger.info("Table %s: migration state = %s", qn, state)
 
@@ -751,7 +746,7 @@ def execute_plan(
                         cur, plan, dropped_views, phases
                     )
                     phases.step("recreate as uncollocated")
-                    _create_empty_replacement(cur, table, backup_suffix)
+                    _create_empty_replacement(cur, table)
 
                 _run_in_transaction(conn, lock_timeout, statement_timeout, _phase1)
                 dropped_views.update(views_dropped_this_phase)
@@ -844,7 +839,6 @@ def execute_plan(
                     plan,
                     states,
                     dropped_views,
-                    backup_suffix,
                     views_recreated=views_recreated,
                     lock_timeout=lock_timeout,
                     statement_timeout=statement_timeout,

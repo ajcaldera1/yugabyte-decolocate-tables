@@ -160,11 +160,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory for captured DDL and manifest (default: temp dir)",
     )
     parser.add_argument(
-        "--backup-suffix",
-        default="_colocated_bak",
-        help="Suffix for renamed backup tables during migration",
-    )
-    parser.add_argument(
         "--split-into-tablets",
         type=int,
         default=1,
@@ -248,7 +243,11 @@ def _print_plan_summary(plan: MigrationPlan, manifest_path: Path) -> None:
         elif not plan.analyze_if_had_stats:
             stats_info = ", ANALYZE skipped (disabled)"
         resume_info = ", resuming Phase 1" if t.resuming else ""
-        print(f"  - {t.qualified} (oid={t.oid}{resume_info}{row_info}{stats_info})")
+        backup_info = f", backup={t.backup_name}" if t.backup_name else ""
+        print(
+            f"  - {t.qualified} (oid={t.oid}{resume_info}{backup_info}"
+            f"{row_info}{stats_info})"
+        )
         if t.create_table_sql_path:
             print(f"      create: {t.create_table_sql_path}")
         if t.post_create_sql_path:
@@ -329,9 +328,7 @@ def run(argv: Optional[List[str]] = None) -> int:
     try:
         analyze_if_had_stats = not args.no_analyze_if_had_stats
 
-        tables, views_create, views_drop = discover(
-            conn, table_names, backup_suffix=args.backup_suffix
-        )
+        tables, views_create, views_drop = discover(conn, table_names)
 
         resuming_any = any(t.resuming for t in tables)
         if resuming_any:
@@ -414,7 +411,6 @@ def run(argv: Optional[List[str]] = None) -> int:
         execute_plan(
             conn,
             plan,
-            backup_suffix=args.backup_suffix,
             connect_fn=conn_factory,
             copy_threads=args.copy_threads,
             lock_timeout=args.lock_timeout,

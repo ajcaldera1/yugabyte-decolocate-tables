@@ -90,7 +90,6 @@ By default, the tool runs `DEALLOCATE ALL` on several short-lived connections on
 | `--table SCHEMA.TABLE` | Table(s) to decolocate; comma/semicolon-separated lists and repeatable flags are supported |
 | `--execute` | Apply changes (default is dry-run) |
 | `--work-dir DIR` | Keep captured SQL and `manifest.json` |
-| `--backup-suffix SUFFIX` | Suffix for renamed backup tables (default `_colocated_bak`) |
 | `--split-into-tablets N` | `SPLIT INTO N TABLETS` on new uncollocated tables (default: `1`) |
 | `--ysql-dump PATH` | Path to `ysql_dump` binary |
 | `--ddl-capture-mode MODE` | `batched` (default) or `per-object` for `ysql_dump` during planning |
@@ -118,6 +117,8 @@ By default, the tool runs `DEALLOCATE ALL` on several short-lived connections on
 
 If `--execute` fails after Phase 1 (views dropped and table renamed to a backup), the tool automatically drops the empty shell, renames the backup back to the original table name, and recreates dependent views from captured DDL. Use `--no-rollback-on-failure` to leave the database as-is for manual recovery.
 
+During Phase 1 the colocated table is renamed to a **derived backup name**: `{table}_colocated_bak` when that fits in PostgreSQL’s 63-byte identifier limit, otherwise `{prefix}_{hash}_colocated_bak` (deterministic from the table name). The plan summary and `manifest.json` record the name as `backup_name`.
+
 ## Data copy
 
 | Row count | Method |
@@ -132,7 +133,7 @@ Migration runs per table (FK order): DDL → data copy → finalize (indexes/con
 
 ## Resuming after interruption
 
-Re-run with the same `--work-dir`, `--backup-suffix`, and `--table` values. The tool detects Phase 1 completion, truncates partial data, and continues from the backup table.
+Re-run with the same `--work-dir` and `--table` values. The tool detects Phase 1 completion, truncates partial data, and continues from the backup table (name derived from the table name; see plan summary `backup=` line).
 
 ## Downtime
 

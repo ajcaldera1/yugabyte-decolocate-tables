@@ -32,7 +32,13 @@ from decolocate_tables.executor import (
     _verify_uncollocated,
     rollback_failed_migration,
 )
-from decolocate_tables.models import MigrationPlan, QualifiedName, TableInfo, ViewInfo
+from decolocate_tables.models import (
+    MigrationPlan,
+    QualifiedName,
+    TableInfo,
+    ViewInfo,
+    derive_backup_name,
+)
 
 
 class TestVerifyAfterCopy(unittest.TestCase):
@@ -140,7 +146,6 @@ class TestRollbackFailedMigration(unittest.TestCase):
             plan,
             {"t": _STATE_PHASE1_DONE},
             {str(view.qualified)},
-            "_colocated_bak",
             views_recreated=False,
         )
         self.assertEqual(mock_run_tx.call_count, 2)
@@ -194,28 +199,30 @@ class TestDetectTableState(unittest.TestCase):
 
     def test_ready(self):
         cur = self._make_cur([("orders", True)])
-        state = _detect_table_state(cur, "public", "orders", "_bak")
+        state = _detect_table_state(cur, "public", "orders")
         self.assertEqual(state, _STATE_READY)
 
     def test_phase1_done(self):
-        cur = self._make_cur([("orders", False), ("orders_bak", True)])
-        state = _detect_table_state(cur, "public", "orders", "_bak")
+        backup = derive_backup_name("orders")
+        cur = self._make_cur([("orders", False), (backup, True)])
+        state = _detect_table_state(cur, "public", "orders")
         self.assertEqual(state, _STATE_PHASE1_DONE)
 
     def test_complete(self):
         cur = self._make_cur([("orders", False)])
-        state = _detect_table_state(cur, "public", "orders", "_bak")
+        state = _detect_table_state(cur, "public", "orders")
         self.assertEqual(state, _STATE_COMPLETE)
 
     def test_corrupt_backup_only(self):
-        cur = self._make_cur([("orders_bak", True)])
+        backup = derive_backup_name("orders")
+        cur = self._make_cur([(backup, True)])
         with self.assertRaises(ExecutorError):
-            _detect_table_state(cur, "public", "orders", "_bak")
+            _detect_table_state(cur, "public", "orders")
 
     def test_neither_exists_raises(self):
         cur = self._make_cur([])
         with self.assertRaises(ExecutorError):
-            _detect_table_state(cur, "public", "orders", "_bak")
+            _detect_table_state(cur, "public", "orders")
 
 
 class TestBatchState(unittest.TestCase):

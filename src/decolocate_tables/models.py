@@ -12,9 +12,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
+
+# Internal marker appended when renaming the colocated table during Phase 1.
+BACKUP_NAME_SUFFIX = "_colocated_bak"
+BACKUP_NAME_HASH_HEX_LEN = 8
+POSTGRES_MAX_IDENTIFIER_BYTES = 63
 
 
 def _strip_identifier_quotes(ident: str) -> str:
@@ -22,6 +28,52 @@ def _strip_identifier_quotes(ident: str) -> str:
     if len(ident) >= 2 and ident[0] == '"' and ident[-1] == '"':
         return ident[1:-1].replace('""', '"')
     return ident
+
+
+def identifier_byte_length(name: str) -> int:
+    """Byte length of *name* as stored in PostgreSQL identifiers (UTF-8)."""
+    return len(name.encode("utf-8"))
+
+
+def _utf8_truncate(name: str, max_bytes: int) -> str:
+    """Truncate *name* to at most *max_bytes* UTF-8 bytes without splitting code points."""
+    if max_bytes <= 0:
+        return ""
+    encoded = name.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return name
+    truncated = encoded[:max_bytes]
+    while truncated and (truncated[-1] & 0xC0) == 0x80:
+        truncated = truncated[:-1]
+    return truncated.decode("utf-8", errors="ignore")
+
+
+def derive_backup_name(table_name: str) -> str:
+    """
+    Deterministic backup relation name for Phase 1 rename.
+
+    Uses ``{table_name}{BACKUP_NAME_SUFFIX}`` when it fits within
+    ``POSTGRES_MAX_IDENTIFIER_BYTES``; otherwise
+    ``{prefix}_{hash}{BACKUP_NAME_SUFFIX}`` with an 8-hex SHA-256 digest of the
+    canonical name so resume and state detection stay stable.
+    """
+    canonical = f"{table_name}{BACKUP_NAME_SUFFIX}"
+    if identifier_byte_length(canonical) <= POSTGRES_MAX_IDENTIFIER_BYTES:
+        return canonical
+
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    hash_part = digest[:BACKUP_NAME_HASH_HEX_LEN]
+    suffix_bytes = identifier_byte_length(BACKUP_NAME_SUFFIX)
+    overhead = 1 + len(hash_part) + suffix_bytes
+    max_prefix_bytes = POSTGRES_MAX_IDENTIFIER_BYTES - overhead
+    if max_prefix_bytes < 0:
+        raise ValueError(
+            f"backup name suffix {BACKUP_NAME_SUFFIX!r} is too long for "
+            f"PostgreSQL identifiers (max {POSTGRES_MAX_IDENTIFIER_BYTES} bytes)"
+        )
+
+    prefix = _utf8_truncate(table_name, max_prefix_bytes)
+    return f"{prefix}_{hash_part}{BACKUP_NAME_SUFFIX}"
 
 
 def _identifier_needs_quoting(ident: str) -> bool:

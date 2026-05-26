@@ -16,7 +16,7 @@ import logging
 from collections import defaultdict, deque
 from typing import Dict, List, Set, Tuple
 
-from decolocate_tables.models import QualifiedName, TableInfo, ViewInfo
+from decolocate_tables.models import QualifiedName, TableInfo, ViewInfo, derive_backup_name
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +226,6 @@ def topo_sort_tables(table_oids: List[int], fk_edges: List[Tuple[int, int]]) -> 
 def discover(
     conn,
     table_names: List[QualifiedName],
-    backup_suffix: str = "_colocated_bak",
 ) -> Tuple[List[TableInfo], List[ViewInfo], List[ViewInfo]]:
     with conn.cursor() as cur:
         cur.execute(DATABASE_COLOCATED_SQL)
@@ -253,7 +252,7 @@ def discover(
                     f"{qn} is not an ordinary table (relkind={relkind!r})"
                 )
             if is_colocated is False:
-                backup_name = f"{qn.name}{backup_suffix}"
+                backup_name = derive_backup_name(qn.name)
                 cur.execute(
                     BACKUP_EXISTS_SQL,
                     {"schema": qn.schema, "backup": backup_name},
@@ -306,6 +305,7 @@ def discover(
                 relkind=relkind,
                 is_colocated=True,
                 source_oid=oid,
+                backup_name=derive_backup_name(qn.name),
             )
             tables.append(info)
             target_oids.append(oid)
